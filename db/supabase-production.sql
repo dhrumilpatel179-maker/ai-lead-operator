@@ -1,5 +1,6 @@
--- Production reference schema. Apply only after review in a dedicated Supabase project.
--- Browser clients use user JWTs. Service-role credentials remain server-only.
+-- Production Postgres/Supabase reference migration.
+-- This file is implemented and tested statically, but is not applied by this repository.
+-- Apply only to a dedicated project after review. Service-role credentials stay server-only.
 
 create extension if not exists pgcrypto;
 
@@ -38,7 +39,8 @@ create table public.leads (
   next_follow_up timestamptz,
   assigned_user_id uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (tenant_id, id)
 );
 create index leads_tenant_status_idx on public.leads(tenant_id, status);
 create index leads_tenant_followup_idx on public.leads(tenant_id, next_follow_up);
@@ -46,52 +48,108 @@ create index leads_tenant_followup_idx on public.leads(tenant_id, next_follow_up
 create table public.messages (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
-  lead_id uuid not null references public.leads(id) on delete cascade,
+  lead_id uuid not null,
   provider_message_id text,
+  idempotency_key text,
   direction text not null check (direction in ('inbound','outbound')),
   channel text not null,
   body text not null,
   send_state text not null default 'received' check (send_state in ('received','pending','sent','failed','blocked')),
   sent_at timestamptz,
   created_at timestamptz not null default now(),
-  unique (tenant_id, channel, provider_message_id)
+  foreign key (tenant_id, lead_id) references public.leads(tenant_id, id) on delete cascade,
+  unique (tenant_id, channel, provider_message_id),
+  unique (tenant_id, idempotency_key)
 );
 create index messages_tenant_lead_idx on public.messages(tenant_id, lead_id, created_at);
 
 create table public.response_drafts (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
-  lead_id uuid not null references public.leads(id) on delete cascade,
+  lead_id uuid not null,
   body text not null,
   authority text not null check (authority in ('green','yellow','red')),
   state text not null check (state in ('pending','approved','rejected','sent','blocked')),
   approved_by uuid references auth.users(id) on delete set null,
   approved_at timestamptz,
+  transition_token text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  foreign key (tenant_id, lead_id) references public.leads(tenant_id, id) on delete cascade,
+  unique (tenant_id, id)
 );
 create index response_drafts_tenant_state_idx on public.response_drafts(tenant_id, state);
+
+create table public.approval_events (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  lead_id uuid not null,
+  draft_id uuid not null,
+  decision text not null check (decision in ('approved','rejected','blocked')),
+  actor_id uuid not null references auth.users(id) on delete restrict,
+  actor_role text not null check (actor_role in ('owner','manager','advisor','viewer')),
+  authority text not null check (authority in ('green','yellow','red')),
+  body_hash text not null check (body_hash ~ '^[0-9a-f]{64}$'),
+  idempotency_key text not null,
+  created_at timestamptz not null default now(),
+  foreign key (tenant_id, lead_id) references public.leads(tenant_id, id) on delete cascade,
+  foreign key (tenant_id, draft_id) references public.response_drafts(tenant_id, id) on delete cascade,
+  unique (tenant_id, idempotency_key)
+);
+
+create table public.send_operations (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  lead_id uuid not null,
+  draft_id uuid not null,
+  idempotency_key text not null,
+  payload_hash text not null check (payload_hash ~ '^[0-9a-f]{64}$'),
+  state text not null check (state in ('sent','failed','blocked')),
+  transport text not null check (transport in ('simulation')),
+  provider_message_id text,
+  failure_code text,
+  created_at timestamptz not null default now(),
+  sent_at timestamptz,
+  foreign key (tenant_id, lead_id) references public.leads(tenant_id, id) on delete cascade,
+  foreign key (tenant_id, draft_id) references public.response_drafts(tenant_id, id) on delete cascade,
+  unique (tenant_id, idempotency_key),
+  unique (tenant_id, draft_id),
+  unique (tenant_id, id)
+);
 
 create table public.follow_ups (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
-  lead_id uuid not null references public.leads(id) on delete cascade,
+  lead_id uuid not null,
   due_at timestamptz not null,
   state text not null check (state in ('scheduled','completed','cancelled')),
-  created_at timestamptz not null default now()
+  source_send_operation_id uuid,
+  created_at timestamptz not null default now(),
+  foreign key (tenant_id, lead_id) references public.leads(tenant_id, id) on delete cascade,
+  foreign key (tenant_id, source_send_operation_id) references public.send_operations(tenant_id, id) on delete restrict,
+  unique (tenant_id, source_send_operation_id)
 );
 create index follow_ups_tenant_due_idx on public.follow_ups(tenant_id, state, due_at);
 
 create table public.audit_events (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
-  lead_id uuid references public.leads(id) on delete set null,
+  lead_id uuid,
   actor_type text not null check (actor_type in ('ai','user','system','integration')),
   actor_id text not null,
+  actor_role text check (actor_role in ('owner','manager','advisor','viewer')),
   action text not null,
   authority text check (authority in ('green','yellow','red')),
+  target_type text not null,
+  target_id text,
+  correlation_id text not null,
   details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  previous_event_hash text,
+  event_hash text not null,
+  created_at timestamptz not null default now(),
+  foreign key (tenant_id, lead_id) references public.leads(tenant_id, id) on delete set null,
+  unique (tenant_id, correlation_id, action),
+  unique (tenant_id, event_hash)
 );
 create index audit_events_tenant_created_idx on public.audit_events(tenant_id, created_at desc);
 
@@ -105,6 +163,20 @@ create table public.business_settings (
   updated_at timestamptz not null default now()
 );
 
+create or replace function public.current_tenant_role(target_tenant uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.role
+  from public.tenant_memberships m
+  where m.tenant_id = target_tenant and m.user_id = auth.uid()
+$$;
+revoke all on function public.current_tenant_role(uuid) from public;
+grant execute on function public.current_tenant_role(uuid) to authenticated;
+
 create or replace function public.is_tenant_member(target_tenant uuid)
 returns boolean
 language sql
@@ -112,41 +184,121 @@ stable
 security definer
 set search_path = public
 as $$
-  select exists (
-    select 1 from public.tenant_memberships m
-    where m.tenant_id = target_tenant and m.user_id = auth.uid()
-  );
+  select public.current_tenant_role(target_tenant) is not null
 $$;
 revoke all on function public.is_tenant_member(uuid) from public;
 grant execute on function public.is_tenant_member(uuid) to authenticated;
+
+create or replace function public.can_write_tenant(target_tenant uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(public.current_tenant_role(target_tenant) in ('owner','manager','advisor'), false)
+$$;
+revoke all on function public.can_write_tenant(uuid) from public;
+grant execute on function public.can_write_tenant(uuid) to authenticated;
+
+create or replace function public.seal_audit_event()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  prior_hash text;
+begin
+  perform pg_advisory_xact_lock(hashtextextended(new.tenant_id::text, 0));
+  select event_hash into prior_hash
+  from public.audit_events
+  where tenant_id = new.tenant_id
+  order by created_at desc, id desc
+  limit 1;
+  new.previous_event_hash := prior_hash;
+  new.event_hash := encode(digest(concat_ws('|',
+    coalesce(prior_hash, ''), new.id::text, new.tenant_id::text,
+    coalesce(new.lead_id::text, ''), new.actor_type, new.actor_id,
+    coalesce(new.actor_role, ''), new.action, coalesce(new.authority, ''),
+    new.target_type, coalesce(new.target_id, ''), new.correlation_id,
+    new.details::text, new.created_at::text
+  ), 'sha256'), 'hex');
+  return new;
+end;
+$$;
+
+create trigger audit_events_seal_before_insert
+before insert on public.audit_events
+for each row execute function public.seal_audit_event();
+
+create or replace function public.reject_immutable_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception 'immutable security record';
+end;
+$$;
+
+create trigger audit_events_immutable
+before update or delete on public.audit_events
+for each row execute function public.reject_immutable_mutation();
+create trigger approval_events_immutable
+before update or delete on public.approval_events
+for each row execute function public.reject_immutable_mutation();
+create trigger send_operations_immutable
+before update or delete on public.send_operations
+for each row execute function public.reject_immutable_mutation();
 
 alter table public.tenants enable row level security;
 alter table public.tenant_memberships enable row level security;
 alter table public.leads enable row level security;
 alter table public.messages enable row level security;
 alter table public.response_drafts enable row level security;
+alter table public.approval_events enable row level security;
+alter table public.send_operations enable row level security;
 alter table public.follow_ups enable row level security;
 alter table public.audit_events enable row level security;
 alter table public.business_settings enable row level security;
 
-create policy tenants_member_select on public.tenants for select to authenticated using (public.is_tenant_member(id));
-create policy memberships_self_select on public.tenant_memberships for select to authenticated using (user_id = auth.uid());
+create policy tenants_member_select on public.tenants
+  for select to authenticated using (public.is_tenant_member(id));
+create policy memberships_self_select on public.tenant_memberships
+  for select to authenticated using (user_id = auth.uid());
 
-create policy leads_member_select on public.leads for select to authenticated using (public.is_tenant_member(tenant_id));
-create policy leads_member_insert on public.leads for insert to authenticated with check (public.is_tenant_member(tenant_id));
-create policy leads_member_update on public.leads for update to authenticated using (public.is_tenant_member(tenant_id)) with check (public.is_tenant_member(tenant_id));
+create policy leads_member_select on public.leads
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy leads_writer_insert on public.leads
+  for insert to authenticated with check (public.can_write_tenant(tenant_id));
+create policy leads_writer_update on public.leads
+  for update to authenticated
+  using (public.can_write_tenant(tenant_id))
+  with check (public.can_write_tenant(tenant_id));
 
-create policy messages_member_select on public.messages for select to authenticated using (public.is_tenant_member(tenant_id));
-create policy drafts_member_select on public.response_drafts for select to authenticated using (public.is_tenant_member(tenant_id));
-create policy drafts_member_update on public.response_drafts for update to authenticated using (public.is_tenant_member(tenant_id)) with check (public.is_tenant_member(tenant_id));
-create policy followups_member_select on public.follow_ups for select to authenticated using (public.is_tenant_member(tenant_id));
-create policy followups_member_update on public.follow_ups for update to authenticated using (public.is_tenant_member(tenant_id)) with check (public.is_tenant_member(tenant_id));
-create policy audit_member_select on public.audit_events for select to authenticated using (public.is_tenant_member(tenant_id));
-create policy settings_member_select on public.business_settings for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy messages_member_select on public.messages
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy drafts_member_select on public.response_drafts
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy approvals_member_select on public.approval_events
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy sends_member_select on public.send_operations
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy followups_member_select on public.follow_ups
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy audit_member_select on public.audit_events
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy settings_member_select on public.business_settings
+  for select to authenticated using (public.is_tenant_member(tenant_id));
 
--- Writes that cause external effects (messages, audit, settings and authority changes)
--- remain server-only through a verified application endpoint. No direct browser
--- INSERT/DELETE policies are intentionally created for these tables.
-
-revoke all on public.audit_events from anon, authenticated;
-grant select on public.audit_events to authenticated;
+-- Browser JWTs may read their tenant and mutate ordinary lead records only when
+-- their role permits. Draft state, approvals, sends, follow-ups, audit events,
+-- settings, and memberships have no browser write policy and are server-only.
+revoke all on public.tenant_memberships, public.messages, public.response_drafts,
+  public.approval_events, public.send_operations, public.follow_ups,
+  public.audit_events, public.business_settings from anon, authenticated;
+grant select on public.tenant_memberships, public.messages, public.response_drafts,
+  public.approval_events, public.send_operations, public.follow_ups,
+  public.audit_events, public.business_settings to authenticated;
+grant select, insert, update on public.leads to authenticated;
+grant select on public.tenants to authenticated;

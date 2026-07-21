@@ -23,16 +23,19 @@ Exact current vendor prices must be verified before purchase. Initial fixed infr
 
 ## Unresolved risks
 
-- The private demo's fixed tenant context is unsafe for real multi-tenant customer data.
+- Sites SIWC plus D1 membership enforcement is implemented, but external customer identity and account lifecycle have not been launch-tested.
+- The Postgres role-aware RLS migration is code only: it has not been applied, integration-tested with Supabase Auth, penetration-tested, backed up, or monitored.
+- D1 authorization is application-enforced; database-native RLS requires the production Postgres migration.
+- Membership provisioning and multi-workspace selection have no admin workflow; ambiguous membership fails closed.
 - Email/calendar OAuth verification and provider policy may affect launch time.
 - Automotive messages can contain safety issues; conservative escalation may reduce automation but protects the business and customer.
 - Revenue attribution can be misleading without shop-confirmed booking and ticket data.
 - Customer consent, privacy notice, retention, deletion, call/SMS rules, and AI disclosure require legal/business approval.
-- Prompt injection from inbound messages must not alter policies, disclose data, or invoke tools.
+- Prompt injection from inbound messages must not alter policies, disclose data, or invoke tools; no model is connected yet.
 
 ## Required approval decisions
 
-1. Approve production Supabase/Postgres RLS and external-auth direction before live customer onboarding.
+1. Approve and independently review the production Supabase/Postgres deployment and external-customer auth direction before live onboarding.
 2. Approve requested Google OAuth scopes before connecting a shop inbox/calendar.
 3. Approve live outbound messaging and the shop-specific Green action list.
 4. Approve privacy/retention terms and incident response ownership.

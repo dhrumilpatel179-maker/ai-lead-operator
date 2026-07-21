@@ -1,6 +1,6 @@
 # AI Lead Operator
 
-Managed lead follow-up for independent auto-repair shops. This repository contains the first sellable vertical slice: a responsive owner dashboard, inquiry intake, deterministic extraction and safety classification, approval-ready response drafts, simulated sending, follow-up scheduling, activity history, owner reporting, and an auditable tenant-scoped data model.
+Managed lead follow-up for independent auto-repair shops. This repository contains a private security milestone: authenticated access, database-derived tenant membership, role-aware authorization, deterministic Green/Yellow/Red enforcement, and durable simulated approval/send records.
 
 ## Product rule
 
@@ -12,10 +12,10 @@ The AI may automate routine administrative work, but it may not diagnose vehicle
 2. Submit the realistic customer message.
 3. The workflow extracts vehicle/service details and classifies urgency and authority.
 4. A response draft opens with an audit trail.
-5. Edit and approve the draft, or escalate it.
-6. The lead status, next action, follow-up, activity, metrics, and daily report update.
+5. An owner, manager, or advisor may edit and approve a non-Red draft; viewers are read-only.
+6. Approval, simulated send, status change, follow-up, and audit event commit atomically.
 
-The deployed demonstration is private and uses a single sample workspace. The D1-backed demo API stores submitted inquiries when its database is available and falls back safely to the in-browser demonstration if the binding is unavailable.
+The currently deployed demonstration is private and uses sample data. This repository revision removes the browser fallback: authentication, membership, authorization, and persistence failures now fail closed. A user must be provisioned in `tenant_memberships` before the secured revision can operate.
 
 ## Local setup
 
@@ -32,6 +32,7 @@ Validation:
 ```bash
 npm run lint
 npm test
+npm run test:security
 npm run validate:artifact
 ```
 
@@ -39,7 +40,7 @@ npm run validate:artifact
 
 - `app/` — application routes and API endpoints
 - `components/` — responsive owner dashboard and workflow UI
-- `lib/` — safety classification, extraction, draft rules, and tenant context
+- `lib/` — safety classification, outbound policy, authenticated membership, and approval state machine
 - `db/` — demo schema plus production Supabase/Postgres RLS reference schema
 - `drizzle/` — generated demo migrations
 - `docs/` — architecture, decisions, scope, security, testing, environments, backlog, and operating assumptions
@@ -49,8 +50,8 @@ npm run validate:artifact
 
 - Local development: local site runtime and local D1 state.
 - Private demonstration: hosted private site, sample Northstar Auto Care workspace.
-- Production customer: requires the credentials and production tenant-security gate listed in `docs/ASSUMPTIONS-COSTS-RISKS.md` before real customer data is accepted.
+- Production customer: not enabled. The Postgres RLS migration is implemented as a reference but has not been applied or independently penetration-tested.
 
 ## Important limitation
 
-The hosted demonstration is not yet approved for real customer data. Production must use the Postgres RLS model in `db/supabase-production.sql` (or an equivalently reviewed database-enforced tenant model), replace the single-tenant demo context, and connect approved email/calendar/model providers.
+The application is not yet approved for real customer data or live outbound messaging. The D1 runtime enforces membership and roles in server code; D1 does not provide PostgreSQL-style RLS. `db/supabase-production.sql` contains the role-aware production RLS design, immutable audit controls, and server-only consequential tables, but it still must be applied, integration-tested against Supabase Auth, reviewed independently, and operated with backups/retention/incident response.

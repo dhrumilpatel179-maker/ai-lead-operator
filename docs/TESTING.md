@@ -6,6 +6,7 @@
 - Contract: provider adapters return normalized inquiry/send/calendar results.
 - Data access: every repository query is tenant-scoped; cross-tenant IDs fail closed.
 - Integration: intake to persisted lead/draft/follow-up/audit; approval to outbound state.
+- Adversarial security: cross-tenant identifiers, viewer writes, edited Red content, idempotent replay, immutable audit surface, and persistence rollback.
 - Render: primary route builds and returns the expected product metadata/content.
 - Manual responsive QA: desktop, tablet, and mobile; keyboard navigation and reduced motion.
 
@@ -31,4 +32,4 @@
 
 ## Release gate
 
-All red-action, outbound-idempotency, provider-failure, deletion, and cross-tenant tests must pass before real customer data or live sending is enabled.
+All Red-action, outbound-idempotency, provider-failure, deletion, cross-tenant, applied-RLS integration, backup/restore, and incident-response tests must pass before real customer data or live sending is enabled. The repository security suite does not substitute for testing the unapplied Postgres migration in a real Supabase project.

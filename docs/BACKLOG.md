@@ -10,14 +10,24 @@
 - [x] Tenant-scoped demo schema and production RLS reference.
 - [x] Architecture, decision record, scope, testing, deployment, and risk documentation.
 
+## Completed in production-security milestone
+
+- [x] Sites SIWC authentication on the dashboard and APIs.
+- [x] Server-derived single-workspace membership and role context.
+- [x] Viewer read-only enforcement and owner/manager/advisor write checks.
+- [x] Role-aware Postgres RLS reference migration; consequential browser writes removed.
+- [x] Server-side Green/Yellow/Red reclassification at approval time.
+- [x] Atomic, idempotent simulated approval/send, message, lead, follow-up, and audit persistence.
+- [x] Fail-closed UI/API behavior and adversarial security tests.
+
 ## Before first live customer
 
-- [ ] Approve production auth/RLS architecture and complete independent security review.
-- [ ] Replace demo tenant context with verified membership resolution.
+- [ ] Apply the Postgres RLS migration in a dedicated environment and complete independent security review.
+- [ ] Provision production memberships and test account lifecycle/revocation.
 - [ ] Connect one Gmail inbox with minimum OAuth scopes and encrypted tokens.
 - [ ] Connect Google Calendar read/free-busy and appointment-request workflow.
 - [ ] Add OpenAI structured extraction/draft adapter with policy validator and deterministic fallback.
-- [ ] Add idempotency, retry, dead-letter visibility, and provider health states.
+- [ ] Add provider retry, dead-letter visibility, and provider health states when the first live provider is approved.
 - [ ] Configure retention/deletion, privacy terms, consent, and incident response.
 - [ ] Run all safety, failure, and cross-tenant acceptance scenarios.
 - [ ] Create Stripe setup and monthly payment links; keep billing manual.

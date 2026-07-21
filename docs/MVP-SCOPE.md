@@ -7,10 +7,10 @@
 - Web/email-shaped inquiry intake.
 - Extraction of customer, vehicle, mileage, service, symptoms, urgency, and source when present.
 - Green/yellow/red authority classification.
-- Editable response draft with human approval.
+- Editable response draft with role-authorized human approval.
 - Hard block on red autonomous sending.
-- Simulated outbound send, status transition, follow-up scheduling, activity trail, and daily summary.
-- Tenant-scoped schema and audit model.
+- Atomic, idempotent simulated outbound send, status transition, follow-up scheduling, approval/send ledger, and activity trail.
+- Server-derived tenant membership, viewer restrictions, role-aware RLS reference schema, and audit model.
 - Failure-mode and unauthorized-tenant tests.
 - Exact interfaces for later Gmail, Calendar, OpenAI, and Stripe adapters.
 
@@ -26,4 +26,4 @@
 
 ## First-customer acceptance gate
 
-Do not ingest real customer information until production authentication, Postgres RLS, OAuth token storage, deletion/retention rules, audit access, and incident response have passed review.
+Do not ingest real customer information until the Postgres RLS migration is applied and tested, external-customer authentication and membership lifecycle are approved, and deletion/retention, audit access, backups, monitoring, and incident response have passed review.

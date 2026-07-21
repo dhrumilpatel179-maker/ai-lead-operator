@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { formatTime, Lead, processInquiry, seedLeads } from "../lib/workflow";
+import { formatTime, Lead } from "../lib/workflow";
+
+type WorkspaceRole = "owner" | "manager" | "advisor" | "viewer";
 
 type Modal = "intake" | "lead" | "report" | null;
 type Filter = "all" | "attention" | "new" | "awaiting" | "followups" | "booked";
@@ -26,8 +28,10 @@ function Icon({ name, size = 24 }: { name: keyof typeof Icons; size?: number }) 
 function initials(name: string) { return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(); }
 function statusTone(lead: Lead) { return lead.authority === "red" ? "red" : lead.status === "Awaiting Customer" ? "yellow" : lead.status === "Booked" ? "blue" : "green"; }
 
-export function LeadOperatorDashboard() {
-  const [leads, setLeads] = useState<Lead[]>(seedLeads);
+export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayName: string; email: string } }) {
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [workspace, setWorkspace] = useState<{ name: string; role: WorkspaceRole } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
@@ -46,18 +50,25 @@ export function LeadOperatorDashboard() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/inquiries").then((response) => response.json()).then((payload: { leads?: Lead[] }) => {
-      if (!active || !payload.leads?.length) return;
-      setLeads((current) => [...payload.leads!, ...current.filter((lead) => !payload.leads!.some((saved) => saved.id === lead.id))]);
-    }).catch(() => undefined);
+    fetch("/api/inquiries").then(async (response) => {
+      const payload = await response.json() as { leads?: Lead[]; workspace?: { name: string; role: WorkspaceRole }; message?: string };
+      if (!response.ok) throw new Error(payload.message ?? "Workspace data is unavailable.");
+      if (!active) return;
+      setLeads(payload.leads ?? []);
+      setWorkspace(payload.workspace ?? null);
+      setLoadError(null);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setLoadError(error instanceof Error ? error.message : "Workspace data is unavailable.");
+    });
     return () => { active = false; };
   }, []);
 
   const counts = useMemo(() => ({
-    new: leads.filter((lead) => lead.status === "New").length + 3,
-    awaiting: leads.filter((lead) => lead.status === "Awaiting Customer").length + 2,
-    followups: leads.filter((lead) => lead.status !== "Booked" && lead.status !== "Closed").length + 1,
-    booked: leads.filter((lead) => lead.status === "Booked").length + 11,
+    new: leads.filter((lead) => lead.status === "New").length,
+    awaiting: leads.filter((lead) => lead.status === "Awaiting Customer").length,
+    followups: leads.filter((lead) => lead.status !== "Booked" && lead.status !== "Closed").length,
+    booked: leads.filter((lead) => lead.status === "Booked").length,
     drafts: leads.filter((lead) => lead.status === "New" && lead.authority !== "red").length,
   }), [leads]);
 
@@ -89,19 +100,21 @@ export function LeadOperatorDashboard() {
       name: String(form.get("name") ?? ""), email: String(form.get("email") ?? ""), phone: String(form.get("phone") ?? ""),
       message: String(form.get("message") ?? ""), source: String(form.get("source") ?? "Website form"),
     };
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    let lead: Lead;
     try {
       const response = await fetch("/api/inquiries", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
-      const payload = await response.json() as { lead?: Lead };
-      lead = payload.lead ?? processInquiry(input);
-    } catch { lead = processInquiry(input); }
-    setLeads((current) => [lead, ...current]);
-    setSelectedId(lead.id);
-    setDraftText(lead.draft);
-    setIsLoading(false);
-    setModal("lead");
-    setToast(lead.authority === "red" ? "Inquiry stored and escalated for human review." : "Inquiry stored and a safe draft is ready.");
+      const payload = await response.json() as { lead?: Lead; message?: string };
+      if (!response.ok || !payload.lead) throw new Error(payload.message ?? "The inquiry was not stored.");
+      const lead = payload.lead;
+      setLeads((current) => [lead, ...current]);
+      setSelectedId(lead.id);
+      setDraftText(lead.draft);
+      setModal("lead");
+      setToast(lead.authority === "red" ? "Inquiry stored and escalated for human review." : "Inquiry stored and a safe draft is ready.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The inquiry was not stored.");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function updateSelected(updater: (lead: Lead) => Lead) {
@@ -109,18 +122,80 @@ export function LeadOperatorDashboard() {
     setLeads((current) => current.map((lead) => lead.id === selectedId ? updater(lead) : lead));
   }
 
-  function approveAndSend() {
+  async function approveAndSend() {
     if (!selected) return;
     if (selected.authority === "red") { setToast("Red actions cannot be sent by AI. Human review remains required."); return; }
-    const now = new Date().toISOString();
-    updateSelected((lead) => ({ ...lead, draft: draftText, status: "Contacted", nextAction: "Await customer reply", activities: [...lead.activities, { label: "Draft approved and response sent (simulated)", at: now }, { label: "24-hour follow-up scheduled", at: now }] }));
-    setModal(null);
-    setToast("Response sent and 24-hour follow-up scheduled.");
+    if (!selected.draftId) { setToast("This draft is not persisted and cannot be sent."); return; }
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/draft-actions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "approve_send",
+          draftId: selected.draftId,
+          body: draftText,
+          idempotencyKey: `approve_${selected.draftId}`,
+        }),
+      });
+      const payload = await response.json() as { receipt?: { sentAt: string }; message?: string };
+      if (!response.ok || !payload.receipt) throw new Error(payload.message ?? "The response was not sent.");
+      const now = payload.receipt.sentAt;
+      updateSelected((lead) => ({
+        ...lead,
+        draft: draftText,
+        draftState: "sent",
+        status: "Contacted",
+        nextAction: "Await customer reply",
+        activities: [...lead.activities,
+          { label: "Draft approved and simulated send committed", at: now },
+          { label: "24-hour follow-up scheduled", at: now },
+        ],
+      }));
+      setModal(null);
+      setToast("Approval, simulated send, audit event, and follow-up were committed.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The response was not sent.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function escalateSelected() {
+    if (!selected?.draftId) { setToast("This draft is not persisted and cannot be escalated."); return; }
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/draft-actions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "escalate",
+          draftId: selected.draftId,
+          idempotencyKey: `escalate_${selected.draftId}`,
+        }),
+      });
+      const payload = await response.json() as { receipt?: { occurredAt: string }; message?: string };
+      if (!response.ok || !payload.receipt) throw new Error(payload.message ?? "The escalation was not stored.");
+      updateSelected((lead) => ({
+        ...lead,
+        authority: "red",
+        draftState: "blocked",
+        status: "Escalated",
+        nextAction: "Human review",
+        activities: [...lead.activities, { label: "Draft escalated to human", at: payload.receipt!.occurredAt, kind: "alert" }],
+      }));
+      setModal(null);
+      setToast("Escalation and audit event were committed.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "The escalation was not stored.");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   const report = useMemo(() => ({
-    received: leads.length + 8,
-    responded: leads.filter((lead) => ["Contacted", "Awaiting Customer", "Booked"].includes(lead.status)).length + 7,
+    received: leads.length,
+    responded: leads.filter((lead) => ["Contacted", "Awaiting Customer", "Booked"].includes(lead.status)).length,
     booked: counts.booked,
     unresolved: leads.filter((lead) => lead.status === "Escalated" || lead.status === "New").length,
   }), [leads, counts.booked]);
@@ -142,16 +217,18 @@ export function LeadOperatorDashboard() {
 
     <div className="main-shell">
       <header className="topbar">
-        <div className="workspace-name">Northstar Auto Care</div>
+        <div className="workspace-name">{workspace?.name ?? "Workspace"}</div>
         <div className="search-wrap"><Icon name="search" size={20} /><input aria-label="Search leads" placeholder="Search leads, customers, or vehicles…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
-        <div className="top-actions"><button className="icon-button" aria-label="Notifications"><Icon name="bell" size={19} /></button><div className="avatar">MP</div><span className="user-name">Mike</span></div>
+        <div className="top-actions"><button className="icon-button" aria-label="Notifications"><Icon name="bell" size={19} /></button><div className="avatar">{initials(currentUser.displayName)}</div><span className="user-name">{currentUser.displayName}</span></div>
       </header>
 
       <main className="content">
         <section className="hero">
-          <div><p className="eyebrow">Monday · July 20</p><h1>Good morning, Mike</h1><p>Here’s what needs your attention across today’s lead follow-up.</p></div>
-          <div className="hero-actions"><button className="button secondary" onClick={() => setModal("report")}><Icon name="file" size={18} />Daily report</button><button className="button primary" onClick={openDrafts}>Review {counts.drafts || 1} {(counts.drafts || 1) === 1 ? "draft" : "drafts"}</button></div>
+          <div><p className="eyebrow">Authenticated workspace · {workspace?.role ?? "verifying role"}</p><h1>Lead follow-up</h1><p>Consequential actions are authorized and persisted by the server.</p></div>
+          <div className="hero-actions"><button className="button secondary" onClick={() => setModal("report")}><Icon name="file" size={18} />Daily report</button><button className="button primary" onClick={openDrafts} disabled={workspace?.role === "viewer"}>Review {counts.drafts} {counts.drafts === 1 ? "draft" : "drafts"}</button></div>
         </section>
+
+        {loadError && <div className="notice yellow" role="alert"><strong>Fail-closed:</strong> {loadError} No local fallback data or success state was created.</div>}
 
         <section className="metrics" aria-label="Lead metrics">
           <Metric label="New leads" value={counts.new} icon="users" selected={filter === "new"} onClick={() => setFilter(filter === "new" ? "all" : "new")} />
@@ -166,7 +243,7 @@ export function LeadOperatorDashboard() {
             <div className="table-scroll"><table className="lead-table"><thead><tr><th>Customer</th><th>Vehicle</th><th>Service</th><th>Status</th><th>Next action</th></tr></thead><tbody>
               {visibleLeads.map((lead, index) => <tr key={lead.id} data-clickable="true" onClick={() => openLead(lead)}><td><div className="customer-cell"><span className={`avatar ${index % 3 === 1 ? "amber" : index % 3 === 2 ? "violet" : ""}`}>{initials(lead.name)}</span>{lead.name}</div></td><td className="vehicle">{lead.vehicle}</td><td className="service">{lead.service}</td><td><span className={`status ${statusTone(lead)}`}>{lead.status === "New" ? "Draft ready" : lead.status}</span></td><td><button className="row-action" onClick={(event) => { event.stopPropagation(); openLead(lead); }}>{lead.nextAction} →</button></td></tr>)}
             </tbody></table>{visibleLeads.length === 0 && <div className="empty">No leads match this view.</div>}</div>
-            <div className="card-footer"><button className="text-button" onClick={() => setModal("intake")}>+ Simulate new inquiry</button></div>
+            <div className="card-footer"><button className="text-button" onClick={() => setModal("intake")} disabled={workspace?.role === "viewer"}>+ Simulate new inquiry</button></div>
           </div>
 
           <div className="side-stack">
@@ -178,7 +255,7 @@ export function LeadOperatorDashboard() {
     </div>
 
     {modal === "intake" && <IntakeModal onClose={() => setModal(null)} onSubmit={submitInquiry} loading={isLoading} />}
-    {modal === "lead" && selected && <LeadModal lead={selected} draft={draftText} setDraft={setDraftText} onClose={() => setModal(null)} onApprove={approveAndSend} onEscalate={() => { updateSelected((lead) => ({ ...lead, authority: "red", status: "Escalated", nextAction: "Human review", activities: [...lead.activities, { label: "Escalated to shop manager", at: new Date().toISOString(), kind: "alert" }] })); setModal(null); setToast("Lead escalated to the shop manager."); }} />}
+    {modal === "lead" && selected && <LeadModal lead={selected} draft={draftText} setDraft={setDraftText} onClose={() => setModal(null)} onApprove={approveAndSend} onEscalate={escalateSelected} canWrite={workspace?.role !== "viewer" && !isLoading} />}
     {modal === "report" && <ReportModal report={report} leads={leads} onClose={() => setModal(null)} />}
     {toast && <div role="status" className="toast">{toast}</div>}
   </div>;
@@ -193,13 +270,13 @@ function IntakeModal({ onClose, onSubmit, loading }: { onClose(): void; onSubmit
   return <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form className="modal" onSubmit={onSubmit}><div className="modal-header"><div><h2>Simulate a new inquiry</h2><p>Run the complete intake and safe-draft workflow.</p></div><button type="button" className="button secondary icon-only" aria-label="Close" onClick={onClose}>×</button></div><div className="modal-body"><div className="form-grid"><div className="field"><label htmlFor="name">Customer name</label><input id="name" name="name" required defaultValue="Alex Morgan" /></div><div className="field"><label htmlFor="email">Email</label><input id="email" name="email" type="email" required defaultValue="alex@example.com" /></div><div className="field"><label htmlFor="phone">Phone</label><input id="phone" name="phone" defaultValue="612-555-0184" /></div><div className="field"><label htmlFor="source">Source</label><select id="source" name="source"><option>Website form</option><option>Email</option><option>Google Business</option><option>Phone message</option></select></div><div className="field full"><label htmlFor="message">Inquiry</label><textarea id="message" name="message" required defaultValue="Hi, I have a 2020 Subaru Outback with about 74,000 miles. The brakes started squeaking this week. Can I bring it in Thursday afternoon?" /></div></div></div><div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" disabled={loading}>{loading ? "Extracting details…" : "Process inquiry"}</button></div></form></div>;
 }
 
-function LeadModal({ lead, draft, setDraft, onClose, onApprove, onEscalate }: { lead: Lead; draft: string; setDraft(value: string): void; onClose(): void; onApprove(): void; onEscalate(): void }) {
+function LeadModal({ lead, draft, setDraft, onClose, onApprove, onEscalate, canWrite }: { lead: Lead; draft: string; setDraft(value: string): void; onClose(): void; onApprove(): void; onEscalate(): void; canWrite: boolean }) {
   return <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal wide" role="dialog" aria-modal="true" aria-label={`Lead details for ${lead.name}`}><div className="modal-header"><div><h2>{lead.name}</h2><p>{lead.source} · Received {formatTime(lead.createdAt)}</p></div><button className="button secondary icon-only" aria-label="Close" onClick={onClose}>×</button></div><div className="modal-body">
     {lead.authority === "red" ? <div className="notice yellow"><strong>Human control required.</strong> This inquiry contains a safety-sensitive or unusual issue. The AI can summarize it but cannot diagnose, promise, or send a consequential response.</div> : <div className="notice green"><strong>{lead.authority === "green" ? "Routine response" : "Approval required"}.</strong> Review and edit the draft before sending in this demonstration.</div>}
     <div className="summary-grid"><div className="summary-item"><span>Vehicle</span><strong>{lead.vehicle}</strong></div><div className="summary-item"><span>Service</span><strong>{lead.service}</strong></div><div className="summary-item"><span>Urgency</span><strong>{lead.urgency}</strong></div><div className="summary-item"><span>Mileage</span><strong>{lead.mileage ? `${lead.mileage} mi` : "Not provided"}</strong></div><div className="summary-item"><span>Status</span><strong>{lead.status}</strong></div><div className="summary-item"><span>Follow-up</span><strong>{formatTime(lead.nextFollowUp)}</strong></div></div>
-    <div className="draft-box"><label><span>AI response draft</span><span>{lead.authority.toUpperCase()} authority</span></label><textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="AI response draft" /></div>
+    <div className="draft-box"><label><span>AI response draft</span><span>{lead.authority.toUpperCase()} authority</span></label><textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="AI response draft" readOnly={!canWrite} /></div>
     <div className="timeline"><strong>Audit trail</strong>{lead.activities.map((activity, index) => <div className="timeline-item" key={`${activity.at}-${index}`}><div>{activity.label} · {formatTime(activity.at)}</div></div>)}</div>
-  </div><div className="modal-actions"><button className="button secondary" onClick={onEscalate}>Escalate to human</button><button className="button primary" onClick={onApprove} disabled={lead.authority === "red"}>{lead.authority === "red" ? "Send blocked" : "Approve & send (simulated)"}</button></div></div></div>;
+  </div><div className="modal-actions"><button className="button secondary" onClick={onEscalate} disabled={!canWrite}>Escalate to human</button><button className="button primary" onClick={onApprove} disabled={!canWrite || lead.authority === "red" || lead.draftState === "sent"}>{lead.authority === "red" ? "Send blocked" : lead.draftState === "sent" ? "Already sent" : "Approve & send (simulated)"}</button></div></div></div>;
 }
 
 function ReportModal({ report, leads, onClose }: { report: { received: number; responded: number; booked: number; unresolved: number }; leads: Lead[]; onClose(): void }) {

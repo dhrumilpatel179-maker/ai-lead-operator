@@ -12,6 +12,7 @@ export type LeadStatus =
 
 export type Lead = {
   id: string;
+  draftId?: string;
   name: string;
   email: string;
   phone?: string;
@@ -28,6 +29,7 @@ export type Lead = {
   authority: AuthorityLevel;
   summary: string;
   draft: string;
+  draftState?: "pending" | "approved" | "rejected" | "sent" | "blocked";
   nextAction: string;
   nextFollowUp: string;
   createdAt: string;

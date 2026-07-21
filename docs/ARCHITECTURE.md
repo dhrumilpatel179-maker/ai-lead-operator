@@ -2,7 +2,7 @@
 
 ## Outcome
 
-The first milestone is a private, single-customer demonstration with a real vertical workflow and production-oriented boundaries. It deliberately avoids a generalized automation platform.
+This milestone turns the private vertical slice into a fail-closed, authenticated, role-aware simulation. It deliberately avoids live providers and does not claim customer-data production readiness.
 
 ```mermaid
 flowchart TD
@@ -23,14 +23,14 @@ flowchart TD
 
 | Layer | Current implementation | Production boundary |
 | --- | --- | --- |
-| Web | Vinext/Next-compatible React, responsive dashboard | Same UI can remain; customer auth becomes externally accessible and tenant-aware |
+| Web | Vinext/Next-compatible React, responsive dashboard, Sites SIWC gate | External customer identity strategy still requires launch review |
 | Intake | Web form/demo API | Gmail forwarding/API and website webhook adapters |
 | Decision engine | Deterministic extraction and safety rules | OpenAI structured output, validated against the same authority policy |
-| Data | D1 for private demonstration | Supabase Postgres with RLS before real customer data |
-| Send | Explicit simulation | Gmail adapter with idempotency and narrowly scoped OAuth |
+| Data | D1 persistence with server-derived membership and roles | Apply and integration-test Supabase Postgres RLS before real customer data |
+| Send | Atomic, idempotent simulation ledger | Gmail adapter with idempotency and narrowly scoped OAuth |
 | Calendar | Appointment request wording only | Google Calendar free/busy; no commitment without configured authority |
 | Billing | Documented only | Stripe payment link/invoice until self-service is justified |
-| Audit | Append-only activity records | Append-only audit table, restricted writes, retention policy |
+| Audit | Server-only append records committed with the action | PostgreSQL hash-chain trigger, export, retention, backup and monitoring |
 
 ## Key boundaries
 
@@ -40,6 +40,7 @@ flowchart TD
 - AI output is treated as untrusted structured input and validated before storage or action.
 - Integrations implement idempotency keys, bounded retries, and visible failure states.
 - Raw inbound content is retained only as required by the customer retention policy.
+- The UI never substitutes local/generated success data for a failed database operation.
 
 ## Failure behavior
 

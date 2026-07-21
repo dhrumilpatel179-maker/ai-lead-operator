@@ -1,0 +1,1 @@
+ALTER TABLE `response_drafts` ADD `transition_token` text;
