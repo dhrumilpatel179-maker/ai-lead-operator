@@ -2,7 +2,7 @@
 
 ## Outcome
 
-This milestone turns the private vertical slice into a fail-closed, authenticated, role-aware simulation. It deliberately avoids live providers and does not claim customer-data production readiness.
+This repository is a fail-closed, authenticated, role-aware simulation. It deliberately avoids live providers and does not claim customer-data or production readiness.
 
 ```mermaid
 flowchart TD
@@ -12,9 +12,9 @@ flowchart TD
     D -->|Green| E[Routine draft]
     D -->|Yellow| F[Approval queue]
     D -->|Red| G[Human escalation]
-    E --> H[Send adapter]
+    E --> H[Simulation adapter]
     F --> H
-    H --> I[Lead and follow-up]
+    H --> I[Lead and simulated follow-up]
     G --> I
     I --> J[Audit and owner report]
 ```
@@ -27,7 +27,7 @@ flowchart TD
 | Intake | Web form/demo API | Gmail forwarding/API and website webhook adapters |
 | Decision engine | Deterministic extraction and safety rules | OpenAI structured output, validated against the same authority policy |
 | Data | D1 persistence with server-derived membership and roles | Apply and integration-test Supabase Postgres RLS before real customer data |
-| Send | Atomic, idempotent simulation ledger | Gmail adapter with idempotency and narrowly scoped OAuth |
+| Send | Atomic, idempotent simulation ledger; no live delivery | Gmail adapter with idempotency and narrowly scoped OAuth only after separate approval |
 | Calendar | Appointment request wording only | Google Calendar free/busy; no commitment without configured authority |
 | Billing | Documented only | Stripe payment link/invoice until self-service is justified |
 | Audit | Server-only append records committed with the action | PostgreSQL hash-chain trigger, export, retention, backup and monitoring |

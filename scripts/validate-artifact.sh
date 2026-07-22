@@ -19,6 +19,18 @@ hosting="${SITES_PROJECT_ROOT}/dist/.openai/hosting.json"
   exit 66
 }
 
+if compgen -G "${SITES_PROJECT_ROOT}/drizzle/*.sql" >/dev/null; then
+  packaged_migrations="${SITES_PROJECT_ROOT}/dist/.openai/drizzle"
+  [[ -d "${packaged_migrations}" ]] || {
+    echo "Missing packaged D1 migrations: dist/.openai/drizzle" >&2
+    exit 66
+  }
+  diff -qr "${SITES_PROJECT_ROOT}/drizzle" "${packaged_migrations}" >/dev/null || {
+    echo "Packaged D1 migrations do not match the reviewed source migrations." >&2
+    exit 66
+  }
+fi
+
 node --input-type=module - "${worker}" "${hosting}" <<'NODE'
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";

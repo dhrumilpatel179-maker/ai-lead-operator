@@ -3,7 +3,7 @@
 ## Assumptions
 
 - First customer is one independent shop/location with a small staff.
-- Human approval remains on for all outbound messages during onboarding.
+- Human approval remains on for all outbound messages during onboarding. Green auto-send is off by default and requires a separate, explicit tenant policy and live-send approval.
 - The owner provides approved hours, services, prohibited claims, escalation contacts, follow-up cadence, and appointment rules.
 - Billing begins with a $250 setup fee and $350/month managed service.
 
@@ -30,7 +30,7 @@ Exact current vendor prices must be verified before purchase. Initial fixed infr
 - Email/calendar OAuth verification and provider policy may affect launch time.
 - Automotive messages can contain safety issues; conservative escalation may reduce automation but protects the business and customer.
 - Revenue attribution can be misleading without shop-confirmed booking and ticket data.
-- Customer consent, privacy notice, retention, deletion, call/SMS rules, and AI disclosure require legal/business approval.
+- Customer consent, privacy notice, retention, deletion, call/SMS rules, and AI disclosure require legal/business approval. `DATA-HANDLING.md` is a pre-activation operational summary, not evidence that the controls are deployed.
 - Prompt injection from inbound messages must not alter policies, disclose data, or invoke tools; no model is connected yet.
 
 ## Required approval decisions

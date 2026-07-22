@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { formatTime, Lead } from "../lib/workflow";
+import { calculateLeadMetrics, formatTime, Lead } from "../lib/workflow";
 
 type WorkspaceRole = "owner" | "manager" | "advisor" | "viewer";
 
@@ -39,6 +39,7 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
   const [toast, setToast] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [metricsAsOf] = useState(() => Date.now());
 
   const selected = leads.find((lead) => lead.id === selectedId) ?? null;
 
@@ -51,10 +52,14 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
   useEffect(() => {
     let active = true;
     fetch("/api/inquiries").then(async (response) => {
-      const payload = await response.json() as { leads?: Lead[]; workspace?: { name: string; role: WorkspaceRole }; message?: string };
+      const payload = await response.json() as { leads?: Lead[]; totalLeads?: number; workspace?: { name: string; role: WorkspaceRole }; message?: string };
       if (!response.ok) throw new Error(payload.message ?? "Workspace data is unavailable.");
       if (!active) return;
-      setLeads(payload.leads ?? []);
+      const loadedLeads = payload.leads ?? [];
+      if (typeof payload.totalLeads === "number" && payload.totalLeads !== loadedLeads.length) {
+        throw new Error("Lead totals could not be reconciled. Metrics are hidden until the data is consistent.");
+      }
+      setLeads(loadedLeads);
       setWorkspace(payload.workspace ?? null);
       setLoadError(null);
     }).catch((error: unknown) => {
@@ -64,13 +69,7 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
     return () => { active = false; };
   }, []);
 
-  const counts = useMemo(() => ({
-    new: leads.filter((lead) => lead.status === "New").length,
-    awaiting: leads.filter((lead) => lead.status === "Awaiting Customer").length,
-    followups: leads.filter((lead) => lead.status !== "Booked" && lead.status !== "Closed").length,
-    booked: leads.filter((lead) => lead.status === "Booked").length,
-    drafts: leads.filter((lead) => lead.status === "New" && lead.authority !== "red").length,
-  }), [leads]);
+  const counts = useMemo(() => calculateLeadMetrics(leads, new Date(metricsAsOf)), [leads, metricsAsOf]);
 
   const visibleLeads = useMemo(() => leads.filter((lead) => {
     const query = search.trim().toLowerCase();
@@ -79,10 +78,10 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
       || (filter === "attention" && (lead.authority !== "green" || lead.status === "Awaiting Customer"))
       || (filter === "new" && lead.status === "New")
       || (filter === "awaiting" && lead.status === "Awaiting Customer")
-      || (filter === "followups" && lead.status !== "Booked" && lead.status !== "Closed")
+      || (filter === "followups" && lead.disposition !== "no_action" && lead.status !== "Booked" && lead.status !== "Closed" && Date.parse(lead.nextFollowUp) <= metricsAsOf)
       || (filter === "booked" && lead.status === "Booked");
     return matchesSearch && matchesFilter;
-  }), [leads, search, filter]);
+  }), [leads, search, filter, metricsAsOf]);
 
   const activities = useMemo(() => leads.flatMap((lead) => lead.activities.map((activity) => ({ ...activity, leadName: lead.name }))).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 4), [leads]);
 
@@ -102,14 +101,22 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
     };
     try {
       const response = await fetch("/api/inquiries", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
-      const payload = await response.json() as { lead?: Lead; message?: string };
+      const payload = await response.json() as { lead?: Lead; duplicate?: { linked: boolean; reason: string }; noAction?: boolean; message?: string };
       if (!response.ok || !payload.lead) throw new Error(payload.message ?? "The inquiry was not stored.");
       const lead = payload.lead;
-      setLeads((current) => [lead, ...current]);
+      setLeads((current) => payload.duplicate?.linked
+        ? current.map((candidate) => candidate.id === lead.id ? lead : candidate)
+        : [lead, ...current]);
       setSelectedId(lead.id);
       setDraftText(lead.draft);
       setModal("lead");
-      setToast(lead.authority === "red" ? "Inquiry stored and escalated for human review." : "Inquiry stored and a safe draft is ready.");
+      setToast(payload.duplicate?.linked
+        ? "Inquiry linked to the existing lead; no duplicate lead was created."
+        : payload.noAction
+          ? "Positive feedback stored with no outbound booking reply."
+          : lead.authority === "red"
+            ? "Inquiry stored and escalated for human review."
+            : "Inquiry stored and a draft simulation is ready.");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "The inquiry was not stored.");
     } finally {
@@ -145,15 +152,15 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
         ...lead,
         draft: draftText,
         draftState: "sent",
-        status: "Contacted",
-        nextAction: "Await customer reply",
+        status: "Qualified",
+        nextAction: "Live sending disabled",
         activities: [...lead.activities,
-          { label: "Draft approved and simulated send committed", at: now },
-          { label: "24-hour follow-up scheduled", at: now },
+          { label: "Draft approval and simulated transport recorded; no live message sent", at: now },
+          { label: "Simulated 24-hour follow-up recorded", at: now },
         ],
       }));
       setModal(null);
-      setToast("Approval, simulated send, audit event, and follow-up were committed.");
+      setToast("Simulation recorded. No live message was sent.");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "The response was not sent.");
     } finally {
@@ -195,7 +202,7 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
 
   const report = useMemo(() => ({
     received: leads.length,
-    responded: leads.filter((lead) => ["Contacted", "Awaiting Customer", "Booked"].includes(lead.status)).length,
+    responded: leads.filter((lead) => lead.draftState === "sent").length,
     booked: counts.booked,
     unresolved: leads.filter((lead) => lead.status === "Escalated" || lead.status === "New").length,
   }), [leads, counts.booked]);
@@ -224,8 +231,8 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
 
       <main className="content">
         <section className="hero">
-          <div><p className="eyebrow">Authenticated workspace · {workspace?.role ?? "verifying role"}</p><h1>Lead follow-up</h1><p>Consequential actions are authorized and persisted by the server.</p></div>
-          <div className="hero-actions"><button className="button secondary" onClick={() => setModal("report")}><Icon name="file" size={18} />Daily report</button><button className="button primary" onClick={openDrafts} disabled={workspace?.role === "viewer"}>Review {counts.drafts} {counts.drafts === 1 ? "draft" : "drafts"}</button></div>
+          <div><p className="eyebrow">Authenticated workspace · {workspace?.role ?? "verifying role"}</p><h1>Lead follow-up simulation</h1><p>Drafts and simulated actions are authorized and persisted by the server. Live sending is disconnected.</p></div>
+          <div className="hero-actions"><button className="button secondary" onClick={() => setModal("report")}><Icon name="file" size={18} />Simulation report</button><button className="button primary" onClick={openDrafts} disabled={workspace?.role === "viewer"}>Review {counts.drafts} {counts.drafts === 1 ? "draft" : "drafts"}</button></div>
         </section>
 
         {loadError && <div className="notice yellow" role="alert"><strong>Fail-closed:</strong> {loadError} No local fallback data or success state was created.</div>}
@@ -233,7 +240,7 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
         <section className="metrics" aria-label="Lead metrics">
           <Metric label="New leads" value={counts.new} icon="users" selected={filter === "new"} onClick={() => setFilter(filter === "new" ? "all" : "new")} />
           <Metric label="Awaiting reply" value={counts.awaiting} icon="chat" tone="amber" selected={filter === "awaiting"} onClick={() => setFilter(filter === "awaiting" ? "all" : "awaiting")} />
-          <Metric label="Follow-ups due" value={counts.followups} icon="calendar" tone="amber" selected={filter === "followups"} onClick={() => setFilter(filter === "followups" ? "all" : "followups")} />
+          <Metric label="Simulated follow-ups due" value={counts.followups} icon="calendar" tone="amber" selected={filter === "followups"} onClick={() => setFilter(filter === "followups" ? "all" : "followups")} />
           <Metric label="Booked this week" value={counts.booked} icon="calendar" tone="green" selected={filter === "booked"} onClick={() => setFilter(filter === "booked" ? "all" : "booked")} />
         </section>
 
@@ -247,7 +254,7 @@ export function LeadOperatorDashboard({ currentUser }: { currentUser: { displayN
           </div>
 
           <div className="side-stack">
-            <div className="card side-card"><h2>AI authority</h2><Authority level="green" name="Green" copy="Auto-send permitted" /><Authority level="yellow" name="Yellow" copy="Approval required" /><Authority level="red" name="Red" copy="Human controlled" /></div>
+            <div className="card side-card"><h2>AI authority</h2><Authority level="green" name="Green" copy="Auto-send is available only when explicitly enabled; off by default" /><Authority level="yellow" name="Yellow" copy="Human approval required; reason shown on each lead" /><Authority level="red" name="Red" copy="Human controlled; autonomous action blocked" /></div>
             <div className="card side-card"><h2>Recent AI activity</h2><div className="activity-list">{activities.map((activity, index) => <div className="activity" key={`${activity.leadName}-${activity.at}-${index}`}><span className={`activity-icon ${activity.kind === "alert" ? "red" : ""}`}>{activity.kind === "alert" ? "!" : "✎"}</span><p>{activity.label.replace("AI extracted lead details and created a", `Drafted a`)}<br/><strong>{activity.leadName}</strong></p><time>{formatTime(activity.at)}</time></div>)}</div><div className="card-footer"><button className="text-button" onClick={() => setModal("report")}>View daily report →</button></div></div>
           </div>
         </section>
@@ -272,14 +279,17 @@ function IntakeModal({ onClose, onSubmit, loading }: { onClose(): void; onSubmit
 
 function LeadModal({ lead, draft, setDraft, onClose, onApprove, onEscalate, canWrite }: { lead: Lead; draft: string; setDraft(value: string): void; onClose(): void; onApprove(): void; onEscalate(): void; canWrite: boolean }) {
   return <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal wide" role="dialog" aria-modal="true" aria-label={`Lead details for ${lead.name}`}><div className="modal-header"><div><h2>{lead.name}</h2><p>{lead.source} · Received {formatTime(lead.createdAt)}</p></div><button className="button secondary icon-only" aria-label="Close" onClick={onClose}>×</button></div><div className="modal-body">
-    {lead.authority === "red" ? <div className="notice yellow"><strong>Human control required.</strong> This inquiry contains a safety-sensitive or unusual issue. The AI can summarize it but cannot diagnose, promise, or send a consequential response.</div> : <div className="notice green"><strong>{lead.authority === "green" ? "Routine response" : "Approval required"}.</strong> Review and edit the draft before sending in this demonstration.</div>}
+    {lead.authority === "red" ? <div className="notice yellow"><strong>Human control required.</strong> Autonomous action is blocked. No live response can be sent from this demonstration.</div> : <div className={lead.authority === "yellow" ? "notice yellow" : "notice green"}><strong>{lead.authority === "green" ? "Routine draft" : "Approval required"}.</strong> This workflow records a simulation only; live sending is disconnected.</div>}
+    {lead.authority !== "green" && <div className="escalation-reasons"><strong>Why this needs attention</strong><ul>{lead.escalationReasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>{lead.immediateEscalation && <p><strong>Immediate escalation:</strong> staff should review this inquiry now.</p>}</div>}
     <div className="summary-grid"><div className="summary-item"><span>Vehicle</span><strong>{lead.vehicle}</strong></div><div className="summary-item"><span>Service</span><strong>{lead.service}</strong></div><div className="summary-item"><span>Urgency</span><strong>{lead.urgency}</strong></div><div className="summary-item"><span>Mileage</span><strong>{lead.mileage ? `${lead.mileage} mi` : "Not provided"}</strong></div><div className="summary-item"><span>Status</span><strong>{lead.status}</strong></div><div className="summary-item"><span>Follow-up</span><strong>{formatTime(lead.nextFollowUp)}</strong></div></div>
-    <div className="draft-box"><label><span>AI response draft</span><span>{lead.authority.toUpperCase()} authority</span></label><textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="AI response draft" readOnly={!canWrite} /></div>
+    {lead.disposition === "no_action"
+      ? <div className="notice green"><strong>No outbound action.</strong> Positive feedback is stored for staff visibility without generating a booking reply.</div>
+      : <div className="draft-box"><label><span>Response draft simulation</span><span>{lead.authority.toUpperCase()} authority</span></label><textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="Response draft simulation" readOnly={!canWrite} /></div>}
     <div className="timeline"><strong>Audit trail</strong>{lead.activities.map((activity, index) => <div className="timeline-item" key={`${activity.at}-${index}`}><div>{activity.label} · {formatTime(activity.at)}</div></div>)}</div>
-  </div><div className="modal-actions"><button className="button secondary" onClick={onEscalate} disabled={!canWrite}>Escalate to human</button><button className="button primary" onClick={onApprove} disabled={!canWrite || lead.authority === "red" || lead.draftState === "sent"}>{lead.authority === "red" ? "Send blocked" : lead.draftState === "sent" ? "Already sent" : "Approve & send (simulated)"}</button></div></div></div>;
+  </div><div className="modal-actions"><button className="button secondary" onClick={onEscalate} disabled={!canWrite || !lead.draftId}>Escalate to human</button><button className="button primary" onClick={onApprove} disabled={!canWrite || !lead.draftId || lead.authority === "red" || lead.draftState === "sent"}>{lead.authority === "red" ? "Autonomous action blocked" : lead.disposition === "no_action" ? "No reply needed" : lead.draftState === "sent" ? "Simulation recorded" : "Approve simulation"}</button></div></div></div>;
 }
 
 function ReportModal({ report, leads, onClose }: { report: { received: number; responded: number; booked: number; unresolved: number }; leads: Lead[]; onClose(): void }) {
   const urgent = leads.filter((lead) => lead.authority === "red");
-  return <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal wide" role="dialog" aria-modal="true" aria-label="Daily owner report"><div className="modal-header"><div><h2>Daily owner report</h2><p>Northstar Auto Care · Monday, July 20</p></div><button className="button secondary icon-only" aria-label="Close" onClick={onClose}>×</button></div><div className="modal-body"><div className="report-grid"><div className="report-stat"><strong>{report.received}</strong><span>Inquiries received</span></div><div className="report-stat"><strong>{report.responded}</strong><span>Responses sent</span></div><div className="report-stat"><strong>{report.booked}</strong><span>Booked this week</span></div><div className="report-stat"><strong>{report.unresolved}</strong><span>Need attention</span></div></div><div className="notice yellow"><strong>{urgent.length} escalated lead{urgent.length === 1 ? "" : "s"}:</strong> {urgent.map((lead) => lead.name).join(", ") || "None"}. No diagnosis, guaranteed pricing, or scheduling commitment was sent automatically.</div><h3>Opportunity summary</h3><p style={{color: "#536174", lineHeight: 1.6}}>The operator responded to routine inquiries, prepared approval-ready drafts, scheduled follow-ups, and kept safety-sensitive messages under human control. Estimated opportunity value is intentionally omitted until the shop supplies approved average-ticket assumptions.</p></div><div className="modal-actions"><button className="button secondary" onClick={onClose}>Close</button><button className="button primary" onClick={() => window.print()}>Print report</button></div></div></div>;
+  return <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal wide" role="dialog" aria-modal="true" aria-label="Daily simulation report"><div className="modal-header"><div><h2>Daily simulation report</h2><p>Northstar Auto Care · Synthetic workspace</p></div><button className="button secondary icon-only" aria-label="Close" onClick={onClose}>×</button></div><div className="modal-body"><div className="report-grid"><div className="report-stat"><strong>{report.received}</strong><span>Inquiries stored</span></div><div className="report-stat"><strong>{report.responded}</strong><span>Response simulations approved</span></div><div className="report-stat"><strong>{report.booked}</strong><span>Sample bookings</span></div><div className="report-stat"><strong>{report.unresolved}</strong><span>Need attention</span></div></div><div className="notice yellow"><strong>{urgent.length} escalated lead{urgent.length === 1 ? "" : "s"}:</strong> {urgent.map((lead) => lead.name).join(", ") || "None"}. No live message, diagnosis, guaranteed pricing, or scheduling commitment was sent.</div><h3>Simulation summary</h3><p style={{color: "#536174", lineHeight: 1.6}}>The operator prepared drafts, recorded simulated approvals and follow-ups, and kept safety-sensitive messages under human control. Live providers and real customer data remain disconnected.</p></div><div className="modal-actions"><button className="button secondary" onClick={onClose}>Close</button><button className="button primary" onClick={() => window.print()}>Print report</button></div></div></div>;
 }

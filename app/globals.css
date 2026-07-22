@@ -158,6 +158,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .notice { border-radius: 8px; padding: 11px 13px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
 .notice.yellow { color: #765000; background: var(--yellow-soft); border: 1px solid #edcd87; }
 .notice.green { color: #155d3d; background: var(--green-soft); border: 1px solid #acd7bd; }
+.escalation-reasons { margin: 0 0 14px; padding: 14px 16px; border: 1px solid #efd19c; border-radius: 9px; background: #fffaf0; color: #654514; }
+.escalation-reasons ul { margin: 8px 0 0 20px; padding: 0; }
+.escalation-reasons li + li { margin-top: 5px; }
+.escalation-reasons p { margin: 10px 0 0; }
 .report-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin-bottom: 18px; }
 .report-stat { border: 1px solid var(--line); background: #fbfaf6; border-radius: 8px; padding: 14px; }
 .report-stat strong { display: block; font-size: 25px; }.report-stat span { font-size: 11px; color: var(--muted); }

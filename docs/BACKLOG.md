@@ -19,6 +19,8 @@
 - [x] Server-side Green/Yellow/Red reclassification at approval time.
 - [x] Atomic, idempotent simulated approval/send, message, lead, follow-up, and audit persistence.
 - [x] Fail-closed UI/API behavior and adversarial security tests.
+- [x] Pilot scenario classification tests, visible Yellow/Red reasons, cross-channel dedupe rules, and Green/no-action handling.
+- [x] Pre-activation customer-facing data-handling summary.
 
 ## Before first live customer
 
@@ -28,7 +30,7 @@
 - [ ] Connect Google Calendar read/free-busy and appointment-request workflow.
 - [ ] Add OpenAI structured extraction/draft adapter with policy validator and deterministic fallback.
 - [ ] Add provider retry, dead-letter visibility, and provider health states when the first live provider is approved.
-- [ ] Configure retention/deletion, privacy terms, consent, and incident response.
+- [ ] Implement and validate the retention/deletion schedule, support-access logging, final subprocessor list, privacy terms, consent, and incident response described in `DATA-HANDLING.md`.
 - [ ] Run all safety, failure, and cross-tenant acceptance scenarios.
 - [ ] Create Stripe setup and monthly payment links; keep billing manual.
 

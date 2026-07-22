@@ -1,10 +1,10 @@
 # AI Lead Operator
 
-Managed lead follow-up for independent auto-repair shops. This repository contains a private security milestone: authenticated access, database-derived tenant membership, role-aware authorization, deterministic Green/Yellow/Red enforcement, and durable simulated approval/send records.
+Managed lead follow-up for independent auto-repair shops. This repository contains a private, synthetic-data simulation with authenticated access, database-derived tenant membership, role-aware authorization, deterministic Green/Yellow/Red enforcement, and durable simulated-action records. It is not production-ready and does not send live messages.
 
 ## Product rule
 
-The AI may automate routine administrative work, but it may not diagnose vehicles, provide safety-critical advice, guarantee price or completion dates, resolve disputes, or make financial/legal commitments. Green actions may be automated, yellow actions begin with human approval, and red actions stay human-controlled.
+The AI may automate routine administrative work, but it may not diagnose vehicles, provide safety-critical advice, guarantee price or completion dates, resolve disputes, or make financial/legal commitments. Green auto-send is available only when a tenant explicitly enables an approved action; it is off by default and is not connected in this repository. Yellow actions require human approval, and Red actions stay human-controlled.
 
 ## Current vertical slice
 
@@ -13,7 +13,7 @@ The AI may automate routine administrative work, but it may not diagnose vehicle
 3. The workflow extracts vehicle/service details and classifies urgency and authority.
 4. A response draft opens with an audit trail.
 5. An owner, manager, or advisor may edit and approve a non-Red draft; viewers are read-only.
-6. Approval, simulated send, status change, follow-up, and audit event commit atomically.
+6. Approval, simulated transport record, status change, simulated follow-up, and audit event commit atomically. No live message is sent.
 
 The currently deployed demonstration is private and uses sample data. This repository revision removes the browser fallback: authentication, membership, authorization, and persistence failures now fail closed. A user must be provisioned in `tenant_memberships` before the secured revision can operate.
 
@@ -57,3 +57,5 @@ The manual Supabase workflow in `.github/workflows/provision-supabase-staging.ym
 ## Important limitation
 
 The application is not yet approved for real customer data or live outbound messaging. The D1 runtime enforces membership and roles in server code; D1 does not provide PostgreSQL-style RLS. `db/supabase-production.sql` contains the role-aware production RLS design, immutable audit controls, and server-only consequential tables, but it still must be applied, integration-tested against Supabase Auth, reviewed independently, and operated with backups/retention/incident response.
+
+Customer-facing pre-activation data practices are summarized in [`docs/DATA-HANDLING.md`](docs/DATA-HANDLING.md). The document explicitly distinguishes required pilot controls from controls that are already deployed.

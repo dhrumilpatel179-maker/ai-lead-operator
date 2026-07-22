@@ -226,7 +226,7 @@ export class D1ApprovalRepository implements ApprovalRepository {
         ),
         d1.prepare(`
           UPDATE leads
-          SET status = 'Contacted', next_action = 'Await customer reply', next_follow_up = ?, updated_at = ?
+          SET status = 'Qualified', next_action = 'Live sending disabled', next_follow_up = ?, updated_at = ?
           WHERE id = ? AND tenant_id = ?
             AND EXISTS (
               SELECT 1 FROM response_drafts

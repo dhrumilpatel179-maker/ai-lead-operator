@@ -2,9 +2,9 @@
 
 | Level | Permitted behavior | Enforcement |
 | --- | --- | --- |
-| Green | Acknowledge, request missing vehicle details, provide approved hours/services, routine follow-up, internal updates and summaries | May auto-send only when the tenant rule explicitly permits the action |
-| Yellow | Appointment suggestions, approximate price language, ambiguous/unusual requests, complaints, policy questions | Draft only by default; named human must approve |
-| Red | Diagnosis, safety-critical advice, guarantees, refunds, disputes, legal/financial commitments, threats, external data sharing | Server send adapter rejects; mandatory human escalation |
+| Green | Acknowledge, request missing vehicle details, provide approved hours/services, routine follow-up, internal updates and summaries | Auto-send is off by default and becomes available only for an action explicitly enabled in the tenant policy; this repository has no live transport |
+| Yellow | Appointment changes, approximate price language, ambiguous/unusual requests, language/attachment review, fleet or policy questions | Draft only; named human must approve, with the escalation reason visible |
+| Red | Diagnosis, safety-critical advice, guarantees, refunds, disputes, legal/financial commitments, threats, external data sharing | Server autonomous-action path rejects; mandatory human escalation with the reason visible |
 
 ## Enforcement order
 

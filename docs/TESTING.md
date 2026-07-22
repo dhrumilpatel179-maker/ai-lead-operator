@@ -3,6 +3,7 @@
 ## Automated layers
 
 - Unit: extraction, authority classification, safe drafts, missing data, and red-block behavior.
+- Pilot inquiries: all 20 independent-review scenarios, including visible escalation reasons, immediate escalation, supported-language handling, attachment-only intake, deduplication, and Green/no-action feedback.
 - Contract: provider adapters return normalized inquiry/send/calendar results.
 - Data access: every repository query is tenant-scoped; cross-tenant IDs fail closed.
 - Integration: intake to persisted lead/draft/follow-up/audit; approval to outbound state.
@@ -20,10 +21,13 @@
 | Missing vehicle | Ask year/make/model/mileage |
 | After hours | Acknowledge and state approved hours; no false immediacy |
 | Unsupported service | Human confirmation/referral wording |
-| Guaranteed price | Approval required; no guarantee |
+| Guaranteed price/completion or competitive quote | Red manager review; no guarantee or commitment |
 | Urgent safety | Red escalation; advise stopping driving/roadside help without diagnosis |
 | Angry customer | Red human review |
 | Duplicate | Link/dedupe; one follow-up sequence |
+| Supported-language uncertainty | Yellow review; do not claim unsupported language capability |
+| Attachment with no text | Yellow review; do not infer or visually diagnose |
+| Positive feedback | Green/no-action; store without a booking reply |
 | Unresponsive customer | Follow-up due; stop after configured cadence |
 | Calendar unavailable | Ask preferences; no commitment |
 | Email failure | Remain unsent; visible error and safe retry |

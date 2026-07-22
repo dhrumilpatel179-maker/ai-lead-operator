@@ -1,4 +1,4 @@
-import { index, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const roles = ["owner", "manager", "advisor", "viewer"] as const;
 
@@ -32,6 +32,9 @@ export const leads = sqliteTable("leads", {
   source: text("source").notNull(),
   status: text("status").notNull(),
   authority: text("authority", { enum: ["green", "yellow", "red"] }).notNull(),
+  escalationReasonsJson: text("escalation_reasons_json").notNull().default("[]"),
+  immediateEscalation: integer("immediate_escalation", { mode: "boolean" }).notNull().default(false),
+  disposition: text("disposition", { enum: ["reply", "no_action", "language_review", "attachment_review"] }).notNull().default("reply"),
   summary: text("summary").notNull(),
   nextAction: text("next_action").notNull(),
   nextFollowUp: text("next_follow_up").notNull(),
