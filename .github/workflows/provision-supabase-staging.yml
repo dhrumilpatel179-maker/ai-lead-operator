@@ -1,0 +1,87 @@
+name: Provision and validate Supabase staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Provision once, or validate the existing staging project
+        type: choice
+        options: [validate, provision]
+        default: validate
+        required: true
+      confirm_free_project:
+        description: For provision only, enter exactly I CONFIRM THIS ORGANIZATION IS FREE
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-staging
+  cancel-in-progress: false
+
+jobs:
+  provision-and-validate:
+    name: Supabase staging security gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: supabase-staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_ORGANIZATION_SLUG: ${{ secrets.SUPABASE_ORGANIZATION_SLUG }}
+      STAGING_OWNER_PASSWORD: ${{ secrets.STAGING_OWNER_PASSWORD }}
+      STAGING_STAFF_PASSWORD: ${{ secrets.STAGING_STAFF_PASSWORD }}
+      STAGING_VIEWER_PASSWORD: ${{ secrets.STAGING_VIEWER_PASSWORD }}
+      STAGING_PROJECT_NAME: ai-lead-operator-staging
+      STAGING_PROJECT_REGION: us-east-2
+      BASELINE_COMMIT: b24bb69f4ece0c72ac7269d180afcb6ee2a13626
+    steps:
+      - name: Check out the private repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify the approved security baseline
+        shell: bash
+        run: git merge-base --is-ancestor "$BASELINE_COMMIT" HEAD
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run repository release gates
+        run: |
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run validate:artifact
+
+      - name: Provision or locate free-tier staging
+        id: staging
+        shell: bash
+        env:
+          STAGING_OPERATION: ${{ inputs.operation }}
+          CONFIRM_FREE_PROJECT: ${{ inputs.confirm_free_project }}
+        run: bash scripts/provision-supabase-staging.sh
+
+      - name: Run hosted Supabase security tests
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ steps.staging.outputs.project_ref }}
+          SUPABASE_PROJECT_URL: ${{ steps.staging.outputs.project_url }}
+        run: node scripts/hosted-supabase-security.mjs
+
+      - name: Publish redacted validation report
+        if: always() && hashFiles('artifacts/supabase-staging-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-staging-security-report
+          path: artifacts/supabase-staging-report.json
+          if-no-files-found: error
+          retention-days: 14
