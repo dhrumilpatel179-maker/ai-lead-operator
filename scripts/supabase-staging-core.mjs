@@ -3,8 +3,69 @@ export const STAGING_MARKER = "AI_LEAD_OPERATOR_SYNTHETIC_STAGING_ONLY";
 export const PROJECT_REF_PATTERN = /^[a-z]{20}$/;
 export const MANUAL_APPROVAL_TEXT = "I VERIFIED FREE PLAN AND FREE PROJECT CAPACITY";
 export const MANUAL_APPROVAL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const REQUIRED_REVIEWER_APPROVAL_TEXT = "GITHUB ENVIRONMENT REQUIRED REVIEWER IS CONFIGURED";
+export const OWNER_ATTESTATION_TEXT = "I REVIEWED THIS COMMIT; NO INDEPENDENT REVIEWER GATE EXISTS";
+export const SYNTHETIC_IDS = Object.freeze({
+  tenantA: "10000000-0000-4000-8000-000000000001",
+  tenantB: "20000000-0000-4000-8000-000000000002",
+  leadA: "10000000-0000-4000-8000-000000000101",
+  leadB: "20000000-0000-4000-8000-000000000102",
+  advisorLead: "10000000-0000-4000-8000-000000000103",
+  draftRed: "10000000-0000-4000-8000-000000000201",
+});
 
 const inactiveStatuses = new Set(["INACTIVE", "PAUSED", "REMOVED"]);
+
+function validateGithubUsername(value, message) {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(value ?? "")) {
+    throw new Error(message);
+  }
+}
+
+function validateFreshUtcTimestamp(value, now, message) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value ?? "")) {
+    throw new Error(`${message} must use ISO-8601 UTC`);
+  }
+  const timestamp = new Date(value);
+  const age = now.getTime() - timestamp.getTime();
+  if (!Number.isFinite(timestamp.getTime()) || age < 0 || age > MANUAL_APPROVAL_MAX_AGE_MS) {
+    throw new Error(`${message} must be valid and no more than 24 hours old`);
+  }
+}
+
+export function validateReviewedCommit(actualCommit, reviewedCommit) {
+  if (!/^[0-9a-f]{40}$/.test(reviewedCommit ?? "")) {
+    throw new Error("reviewed_commit must be an exact lowercase 40-character commit SHA");
+  }
+  if (!/^[0-9a-f]{40}$/.test(actualCommit ?? "")) {
+    throw new Error("github.sha must be an exact lowercase 40-character commit SHA");
+  }
+  if (actualCommit !== reviewedCommit) {
+    throw new Error("Workflow commit does not exactly match the explicitly reviewed commit");
+  }
+}
+
+export function validateStagingChangeApproval(approval, now = new Date()) {
+  validateReviewedCommit(approval.actualCommit, approval.reviewedCommit);
+  if (approval.approvedCommit !== approval.actualCommit) {
+    throw new Error("The recorded staging approval does not match this exact commit");
+  }
+  validateGithubUsername(approval.approvedBy, "The staging approval must record the approving GitHub username");
+  validateFreshUtcTimestamp(approval.approvedAt, now, "The staging approval timestamp");
+  if (approval.mode === "required-reviewer") {
+    if (approval.statement !== REQUIRED_REVIEWER_APPROVAL_TEXT) {
+      throw new Error("Required-reviewer mode must record that the GitHub Environment reviewer is configured");
+    }
+    return { mode: approval.mode, independentReviewerClaimed: true };
+  }
+  if (approval.mode === "owner-attestation") {
+    if (approval.statement !== OWNER_ATTESTATION_TEXT) {
+      throw new Error("Owner-attestation mode must explicitly record that no independent reviewer gate exists");
+    }
+    return { mode: approval.mode, independentReviewerClaimed: false };
+  }
+  throw new Error("SUPABASE_STAGING_APPROVAL_MODE must be required-reviewer or owner-attestation");
+}
 
 export function validateTestPasswords(passwords) {
   const entries = Object.entries(passwords);
@@ -22,17 +83,8 @@ export function validateManualBillingApproval(approval, now = new Date()) {
   if (approval.statement !== MANUAL_APPROVAL_TEXT) {
     throw new Error("A separately recorded Free-plan and capacity approval is required");
   }
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(approval.approvedBy ?? "")) {
-    throw new Error("The billing approval must record the approving GitHub username");
-  }
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(approval.approvedAt ?? "")) {
-    throw new Error("The billing approval timestamp must use ISO-8601 UTC");
-  }
-  const approvedAt = new Date(approval.approvedAt);
-  const age = now.getTime() - approvedAt.getTime();
-  if (!Number.isFinite(approvedAt.getTime()) || age < 0 || age > MANUAL_APPROVAL_MAX_AGE_MS) {
-    throw new Error("The billing approval timestamp must be valid and no more than 24 hours old");
-  }
+  validateGithubUsername(approval.approvedBy, "The billing approval must record the approving GitHub username");
+  validateFreshUtcTimestamp(approval.approvedAt, now, "The billing approval timestamp");
 }
 
 export function organizationPlan(organization) {
@@ -83,8 +135,32 @@ export function validateExpectedProject({ projects, organization, expectedRef, e
   if (!project) throw new Error("The recorded staging project reference is not accessible");
   if (project.name !== STAGING_PROJECT_NAME) throw new Error("Wrong project rejected: staging-only project-name marker is missing");
   if (!projectOrganizationMatches(project, organization)) throw new Error("Wrong project rejected: organization does not match");
-  if (project.region && project.region !== expectedRegion) throw new Error("Wrong project rejected: region does not match");
+  if (typeof project.region !== "string" || !project.region.trim()) {
+    throw new Error("Wrong project rejected: Supabase omitted the project region");
+  }
+  if (project.region !== expectedRegion) throw new Error("Wrong project rejected: region does not match");
   return project;
+}
+
+export function advisorLeadUpsert() {
+  return {
+    path: "leads?on_conflict=id",
+    prefer: "resolution=merge-duplicates,return=representation",
+    body: {
+      id: SYNTHETIC_IDS.advisorLead,
+      tenant_id: SYNTHETIC_IDS.tenantA,
+      name: "Allowed staff write",
+      email: "staff-write@example.com",
+      service: "Test",
+      symptoms: "Synthetic",
+      urgency: "routine",
+      source: "staging",
+      status: "New",
+      authority: "green",
+      summary: "Synthetic advisor insert",
+      next_action: "Review",
+    },
+  };
 }
 
 export function migrationDecision(state, expectedSchemaSha) {

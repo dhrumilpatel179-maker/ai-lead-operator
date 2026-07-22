@@ -52,7 +52,7 @@ npm run validate:artifact
 - Private demonstration: hosted private site, sample Northstar Auto Care workspace.
 - Production customer: not enabled. The Postgres RLS migration is implemented as a reference but has not been applied or independently penetration-tested.
 
-The manual Supabase workflow in `.github/workflows/provision-supabase-staging.yml` provisions and validates a staging database only. It does not deploy this application. Its cost guard combines Management API checks with a separately recorded manual approval because Supabase does not expose a documented API guarantee of account-wide free-project capacity; see `docs/SUPABASE-STAGING.md`.
+The manual Supabase workflow in `.github/workflows/provision-supabase-staging.yml` provisions and validates a staging database only. It does not deploy this application. It requires the dispatched SHA to exactly match an explicit reviewed-commit input before protected environment access. Its cost guard combines Management API checks with a separately recorded manual approval because Supabase does not expose a documented API guarantee of account-wide free-project capacity. If GitHub required reviewers are unavailable, the documented fallback is owner self-attestation—not an independent review gate. See `docs/SUPABASE-STAGING.md`.
 
 ## Important limitation
 

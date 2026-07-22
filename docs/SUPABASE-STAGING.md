@@ -9,6 +9,8 @@ The manually dispatched GitHub Actions workflow provisions and validates only a 
 - It stops when the Management API already shows two active accessible projects.
 - It refuses paid-compute and high-availability creation fields.
 - It requires a separately recorded, named, time-stamped manual Free-plan/capacity approval no more than 24 hours old.
+- It requires a full 40-character `reviewed_commit` dispatch input and rejects the run unless it exactly equals `github.sha` in a separate job that has no protected environment or secrets.
+- It then requires a second, persistent change-approval record bound to the same exact commit before any secret is injected into a command.
 - It creates a project with the exact staging-only name marker `ai-lead-operator-staging-only-synthetic`.
 - It will not retrieve project keys or run privileged SQL until `SUPABASE_STAGING_PROJECT_REF` is recorded in the protected GitHub Environment and the ref, organization, region, and project-name marker all match.
 - It applies the schema and database marker in one transaction, resumes safely when project creation succeeded but migration did not start, and skips an already verified migration.
@@ -23,7 +25,7 @@ Supabase documents an account-wide limit of two active Free projects across orga
 
 ## Protected environment configuration
 
-Create the GitHub Environment `supabase-staging`, require a reviewer, and add these **secrets**:
+Create the GitHub Environment `supabase-staging` and restrict deployment branches to `main`. If GitHub exposes required reviewers for this private repository and plan, configure a trusted reviewer and prevent self-review where practical. Add these **secrets**:
 
 - `SUPABASE_ACCESS_TOKEN` — a newly generated personal access token.
 - `SUPABASE_ORGANIZATION_SLUG` — the exact target organization slug.
@@ -36,19 +38,41 @@ Add these **environment variables** for a provisioning run:
 - `SUPABASE_FREE_TIER_APPROVAL` — exactly `I VERIFIED FREE PLAN AND FREE PROJECT CAPACITY`.
 - `SUPABASE_FREE_TIER_APPROVED_BY` — the GitHub username of the person who checked Supabase billing and project capacity.
 - `SUPABASE_FREE_TIER_APPROVED_AT` — the approval time in ISO-8601 UTC; it must be no more than 24 hours old.
+- `SUPABASE_STAGING_APPROVAL_MODE` — exactly `required-reviewer` when GitHub actually enforces a required reviewer, otherwise `owner-attestation`.
+- `SUPABASE_STAGING_APPROVED_COMMIT` — the exact lowercase 40-character commit SHA reviewed for the run.
+- `SUPABASE_STAGING_APPROVED_BY` — GitHub username of the person recording the change approval.
+- `SUPABASE_STAGING_APPROVED_AT` — ISO-8601 UTC approval time, no more than 24 hours old.
+- `SUPABASE_STAGING_CHANGE_APPROVAL` — use the exact value for the selected model below.
+
+### Approval models
+
+When a GitHub Environment required reviewer is available and configured:
+
+- Set `SUPABASE_STAGING_APPROVAL_MODE` to `required-reviewer`.
+- Set `SUPABASE_STAGING_CHANGE_APPROVAL` to `GITHUB ENVIRONMENT REQUIRED REVIEWER IS CONFIGURED`.
+- GitHub blocks the protected job until its configured reviewer approves. The workflow records the commit-bound approval metadata, but the statement alone does not prove the GitHub protection rule is configured.
+
+When GitHub does not offer required reviewers for this private repository:
+
+- Set `SUPABASE_STAGING_APPROVAL_MODE` to `owner-attestation`.
+- Set `SUPABASE_STAGING_CHANGE_APPROVAL` to `I REVIEWED THIS COMMIT; NO INDEPENDENT REVIEWER GATE EXISTS`.
+- The repository owner must review the exact commit, record the commit/username/time variables, and dispatch that exact SHA. This is an enforced, auditable self-attestation. It is **not** an independent reviewer gate and must never be described as one.
+
+In either model, the unprivileged `reviewed-commit-gate` must pass before the `supabase-staging` environment job can start. Secrets are scoped only to the provisioner and hosted-validation steps; release and approval checks do not receive them as command environment variables.
 
 Leave `SUPABASE_STAGING_PROJECT_REF` unset for the first `provision` run. That run creates only the marked project; it does not retrieve keys or run SQL. Record the returned 20-character ref as the environment variable `SUPABASE_STAGING_PROJECT_REF`, then run `resume`.
 
 ## Safe run and recovery sequence
 
-1. Manually confirm the target organization is Free and that the account has a free active-project slot; record the three approval variables above.
-2. Dispatch `operation=provision` with `CREATE SYNTHETIC STAGING PROJECT`.
-3. Record the returned ref as `SUPABASE_STAGING_PROJECT_REF` in the protected environment.
-4. Dispatch `operation=resume`. It verifies the recorded identity and staging marker before privileged access, then atomically applies or safely resumes the migration.
-5. Use `operation=validate` for subsequent reruns. It refuses to modify an uninitialized or mismatched database.
+1. Review the exact workflow commit and record the five staging change-approval variables above.
+2. Manually confirm the target organization is Free and that the account has a free active-project slot; record the three billing approval variables above.
+3. Dispatch the workflow from that exact commit with `reviewed_commit=<the same 40-character SHA>`, `operation=provision`, and `confirm_project_creation=CREATE SYNTHETIC STAGING PROJECT`.
+4. Record the returned ref as `SUPABASE_STAGING_PROJECT_REF` in the protected environment.
+5. Dispatch `operation=resume` with the same exact `reviewed_commit`. It verifies the recorded identity and staging marker before privileged access, then atomically applies or safely resumes the migration.
+6. Use `operation=validate` with the same exact `reviewed_commit` for subsequent reruns. It refuses to modify an uninitialized or mismatched database.
 
 If project creation succeeds but the job stops before the ref is recorded, rerun `provision`: the workflow finds the uniquely marked project and reports the same ref without creating another. If a non-atomic or externally created partial schema is detected, the workflow fails closed; cleanup must be reviewed and performed manually against the recorded staging ref.
 
 ## Validation scope
 
-Hosted checks cover Supabase Auth, tenant isolation, viewer restrictions, advisor permissions, Red-action browser bypass, audit isolation/immutability, transaction rollback, policy/trigger inventory, database marker verification, and rerun safety. These checks validate the hosted database controls. They do not deploy or exercise the web application against Supabase.
+Hosted checks cover Supabase Auth, tenant isolation, viewer restrictions, advisor permissions, Red-action browser bypass, audit isolation/immutability, transaction rollback, policy/trigger inventory, database marker verification, and rerun safety. Persistent synthetic records use fixed IDs, unique natural keys, or conflict-safe upserts; repeated `resume` and `validate` runs must not add duplicate leads or test data. A missing project region fails closed before project keys, privileged SQL, or hosted validation. These checks validate the hosted database controls. They do not deploy or exercise the web application against Supabase.

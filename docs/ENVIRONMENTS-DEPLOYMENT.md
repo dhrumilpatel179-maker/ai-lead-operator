@@ -25,7 +25,7 @@
 
 ## Supabase database staging
 
-The private manual workflow provisions and tests only the Supabase database, Auth, schema, and RLS controls. It does not deploy the application or change the private demonstration. Billing/capacity safety is enforced through available Management API checks plus a persistent manual approval; it is not described as an API-guaranteed free-tier deployment.
+The private manual workflow provisions and tests only the Supabase database, Auth, schema, and RLS controls. It does not deploy the application or change the private demonstration. Billing/capacity safety uses available Management API checks plus a persistent manual approval; it is not an API-guaranteed free-tier deployment. An unprivileged job requires `github.sha` to equal the explicit reviewed-commit input before the protected environment job can start. If GitHub required reviewers are unavailable, the enforced fallback is a commit-bound owner self-attestation that explicitly states no independent reviewer gate exists.
 
 ## Configuration names
 

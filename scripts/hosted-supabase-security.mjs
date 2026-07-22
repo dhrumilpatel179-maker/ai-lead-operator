@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import {
   STAGING_MARKER,
+  SYNTHETIC_IDS,
+  advisorLeadUpsert,
   findAuthUserByEmail,
   selectOrganization,
   validateExpectedProject,
@@ -105,11 +107,7 @@ const userIds = {};
 for (const [name, account] of Object.entries(credentials)) userIds[name] = await ensureUser(account);
 for (const id of Object.values(userIds)) assert.match(id, /^[0-9a-f-]{36}$/i);
 
-const tenantA = "10000000-0000-4000-8000-000000000001";
-const tenantB = "20000000-0000-4000-8000-000000000002";
-const leadA = "10000000-0000-4000-8000-000000000101";
-const leadB = "20000000-0000-4000-8000-000000000102";
-const draftRed = "10000000-0000-4000-8000-000000000201";
+const { tenantA, tenantB, leadA, leadB, advisorLead, draftRed } = SYNTHETIC_IDS;
 
 await sql(`
 insert into public.tenants (id,name) values
@@ -151,14 +149,14 @@ async function signIn(account) {
 const tokens = {};
 for (const [name, account] of Object.entries(credentials)) tokens[name] = await signIn(account);
 
-async function rest(token, path, method = "GET", body, expected = [200]) {
+async function rest(token, path, method = "GET", body, expected = [200], prefer = "return=representation") {
   return request(`${projectUrl}/rest/v1/${path}`, {
     method,
     headers: {
       apikey: publishableKey,
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      prefer: "return=representation",
+      prefer,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   }, expected);
@@ -175,12 +173,19 @@ await rest(tokens.viewer, "leads", "POST", {
   status: "New", authority: "green", summary: "Must not persist", next_action: "None",
 }, [401, 403]);
 
-const advisorCreated = await rest(tokens.staff, "leads", "POST", {
-  tenant_id: tenantA, name: "Allowed staff write", email: "staff-write@example.com",
-  service: "Test", symptoms: "Synthetic", urgency: "routine", source: "staging",
-  status: "New", authority: "green", summary: "Synthetic advisor insert", next_action: "Review",
-}, [201]);
+const advisorUpsert = advisorLeadUpsert();
+const advisorCreated = await rest(
+  tokens.staff,
+  advisorUpsert.path,
+  "POST",
+  advisorUpsert.body,
+  [200, 201],
+  advisorUpsert.prefer,
+);
 assert.equal(advisorCreated[0]?.tenant_id, tenantA);
+assert.equal(advisorCreated[0]?.id, advisorLead);
+const advisorRows = await rest(tokens.staff, `leads?id=eq.${advisorLead}&select=id,tenant_id`);
+assert.deepEqual(advisorRows, [{ id: advisorLead, tenant_id: tenantA }], "repeated validation created duplicate advisor leads");
 
 await rest(tokens.owner, "response_drafts", "POST", {
   tenant_id: tenantA, lead_id: leadA, body: "Attempted browser bypass", authority: "green", state: "pending",
@@ -218,13 +223,14 @@ assert.equal(controlRow.staging_marker, STAGING_MARKER);
 const report = {
   generatedAt: new Date().toISOString(),
   baselineCommit: process.env.BASELINE_COMMIT,
+  reviewedCommit: process.env.REVIEWED_COMMIT,
   project: { name: process.env.STAGING_PROJECT_NAME, region: process.env.STAGING_PROJECT_REGION, status: "ACTIVE_HEALTHY" },
   syntheticAccounts: Object.values(credentials).map(({ email, role }) => ({ email, role })),
   tests: {
     authentication: "passed", tenantIsolation: "passed", viewerRestriction: "passed",
     staffWritePolicy: "passed", redDraftBrowserBypass: "passed",
     auditReadIsolationAndImmutability: "passed", transactionRollback: "passed",
-    rlsPolicyAndTriggerInventory: "passed",
+    rlsPolicyAndTriggerInventory: "passed", syntheticDataRerunSafety: "passed",
   },
   integrations: { gmail: false, calendar: false, openai: false, stripe: false, liveMessaging: false, realCustomerData: false },
 };
