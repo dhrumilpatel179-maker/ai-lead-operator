@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
+import {
+  STAGING_MARKER,
+  findAuthUserByEmail,
+  selectOrganization,
+  validateExpectedProject,
+  validateTestPasswords,
+} from "./supabase-staging-core.mjs";
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -10,6 +17,7 @@ function required(name) {
 const managementRoot = "https://api.supabase.com/v1";
 const projectRef = required("SUPABASE_PROJECT_REF");
 const projectUrl = required("SUPABASE_PROJECT_URL");
+const expectedProjectRef = required("SUPABASE_EXPECTED_PROJECT_REF");
 const accessToken = required("SUPABASE_ACCESS_TOKEN");
 const organizationSlug = required("SUPABASE_ORGANIZATION_SLUG");
 const credentials = {
@@ -17,8 +25,10 @@ const credentials = {
   staff: { email: "staff.staging@example.com", password: required("STAGING_STAFF_PASSWORD"), role: "advisor" },
   viewer: { email: "viewer.staging@example.com", password: required("STAGING_VIEWER_PASSWORD"), role: "viewer" },
 };
+validateTestPasswords(Object.fromEntries(Object.entries(credentials).map(([name, account]) => [name, account.password])));
+assert.equal(projectRef, expectedProjectRef, "Workflow output does not match the recorded staging project reference");
 
-for (const value of [projectRef, projectUrl, accessToken, organizationSlug, ...Object.values(credentials).map((c) => c.password)]) {
+for (const value of [accessToken, organizationSlug, ...Object.values(credentials).map((c) => c.password)]) {
   process.stdout.write(`::add-mask::${value}\n`);
 }
 
@@ -47,6 +57,17 @@ function keyValue(entry) {
   return entry?.api_key ?? entry?.key ?? entry?.value ?? "";
 }
 
+// Re-bind to the recorded project reference and verify the staging-only
+// project marker before retrieving privileged API keys.
+const [organizations, projects] = await Promise.all([management("/organizations"), management("/projects")]);
+const organization = selectOrganization(organizations, organizationSlug);
+validateExpectedProject({
+  projects,
+  organization,
+  expectedRef: expectedProjectRef,
+  expectedRegion: process.env.STAGING_PROJECT_REGION ?? "us-east-2",
+});
+
 const apiKeys = await management(`/projects/${projectRef}/api-keys?reveal=true`);
 let publishableKey = keyValue(apiKeys.find((entry) => entry.type === "publishable" || entry.name === "default"));
 let secretKey = keyValue(apiKeys.find((entry) => entry.type === "secret"));
@@ -71,8 +92,10 @@ async function ensureUser(account) {
     user_metadata: { synthetic: true, environment: "staging" },
   }, [200, 201, 422]);
   if (created?.id) return created.id;
-  const users = await adminAuth("/admin/users?page=1&per_page=100", "GET");
-  const user = users.users?.find((candidate) => candidate.email === account.email);
+  const user = await findAuthUserByEmail(
+    (page, perPage) => adminAuth(`/admin/users?page=${page}&per_page=${perPage}`, "GET"),
+    account.email,
+  );
   assert.ok(user?.id, `Could not provision synthetic ${account.role} user`);
   await adminAuth(`/admin/users/${user.id}`, "PUT", { password: account.password, email_confirm: true });
   return user.id;
@@ -183,12 +206,14 @@ const controls = await sql(`
 select
   (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relrowsecurity and c.relname in ('tenants','tenant_memberships','leads','messages','response_drafts','approval_events','send_operations','follow_ups','audit_events','business_settings'))::int as rls_tables,
   (select count(*) from pg_policies where schemaname='public')::int as policies,
-  (select count(*) from pg_trigger where tgname in ('audit_events_immutable','approval_events_immutable','send_operations_immutable') and not tgisinternal)::int as immutable_triggers;
+  (select count(*) from pg_trigger where tgname in ('audit_events_immutable','approval_events_immutable','send_operations_immutable') and not tgisinternal)::int as immutable_triggers,
+  (select environment_marker from public.ai_lead_operator_staging_metadata where singleton=true) as staging_marker;
 `);
 const controlRow = controls[0]?.result?.[0] ?? controls[0];
 assert.equal(Number(controlRow.rls_tables), 10);
 assert.ok(Number(controlRow.policies) >= 12);
 assert.equal(Number(controlRow.immutable_triggers), 3);
+assert.equal(controlRow.staging_marker, STAGING_MARKER);
 
 const report = {
   generatedAt: new Date().toISOString(),

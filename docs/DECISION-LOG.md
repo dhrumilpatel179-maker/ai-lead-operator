@@ -12,3 +12,5 @@
 | 2026-07-21 | Fail closed on persistence and membership errors | A simulated success must never mask a missing durable record |
 | 2026-07-21 | Commit approval and simulated send artifacts atomically with idempotency | Prevents partial state, duplicate sends, and missing audit/follow-up records |
 | 2026-07-21 | Keep Postgres RLS as an unapplied production migration | No Supabase project or customer-data authorization has been approved yet |
+| 2026-07-22 | Split staging creation from migration and bind later runs to a recorded project ref | Prevents privileged work against an ambiguous or wrong project and makes project-creation failures resumable |
+| 2026-07-22 | Require a persistent manual Free-plan/capacity approval in addition to API checks | Supabase does not document an authoritative Management API result that guarantees account-wide free-project capacity |

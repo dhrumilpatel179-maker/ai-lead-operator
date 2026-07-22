@@ -1,16 +1,16 @@
-name: Provision and validate Supabase staging
+name: Provision and validate Supabase database staging
 
 on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Provision once, or validate the existing staging project
+        description: Create the project, resume migration, or validate the existing database
         type: choice
-        options: [validate, provision]
+        options: [validate, resume, provision]
         default: validate
         required: true
-      confirm_free_project:
-        description: For provision only, enter exactly I CONFIRM THIS ORGANIZATION IS FREE
+      confirm_project_creation:
+        description: For provision only, enter exactly CREATE SYNTHETIC STAGING PROJECT
         type: string
         required: false
 
@@ -33,12 +33,16 @@ jobs:
       STAGING_OWNER_PASSWORD: ${{ secrets.STAGING_OWNER_PASSWORD }}
       STAGING_STAFF_PASSWORD: ${{ secrets.STAGING_STAFF_PASSWORD }}
       STAGING_VIEWER_PASSWORD: ${{ secrets.STAGING_VIEWER_PASSWORD }}
-      STAGING_PROJECT_NAME: ai-lead-operator-staging
+      SUPABASE_STAGING_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
+      SUPABASE_FREE_TIER_APPROVAL: ${{ vars.SUPABASE_FREE_TIER_APPROVAL }}
+      SUPABASE_FREE_TIER_APPROVED_BY: ${{ vars.SUPABASE_FREE_TIER_APPROVED_BY }}
+      SUPABASE_FREE_TIER_APPROVED_AT: ${{ vars.SUPABASE_FREE_TIER_APPROVED_AT }}
+      STAGING_PROJECT_NAME: ai-lead-operator-staging-only-synthetic
       STAGING_PROJECT_REGION: us-east-2
       BASELINE_COMMIT: b24bb69f4ece0c72ac7269d180afcb6ee2a13626
     steps:
       - name: Check out the private repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
@@ -47,7 +51,7 @@ jobs:
         run: git merge-base --is-ancestor "$BASELINE_COMMIT" HEAD
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -62,24 +66,26 @@ jobs:
           npm test
           npm run validate:artifact
 
-      - name: Provision or locate free-tier staging
+      - name: Provision, resume, or validate database staging
         id: staging
         shell: bash
         env:
           STAGING_OPERATION: ${{ inputs.operation }}
-          CONFIRM_FREE_PROJECT: ${{ inputs.confirm_free_project }}
-        run: bash scripts/provision-supabase-staging.sh
+          CONFIRM_PROJECT_CREATION: ${{ inputs.confirm_project_creation }}
+        run: node scripts/provision-supabase-staging.mjs
 
       - name: Run hosted Supabase security tests
+        if: steps.staging.outputs.ready == 'true'
         shell: bash
         env:
           SUPABASE_PROJECT_REF: ${{ steps.staging.outputs.project_ref }}
           SUPABASE_PROJECT_URL: ${{ steps.staging.outputs.project_url }}
+          SUPABASE_EXPECTED_PROJECT_REF: ${{ vars.SUPABASE_STAGING_PROJECT_REF }}
         run: node scripts/hosted-supabase-security.mjs
 
       - name: Publish redacted validation report
         if: always() && hashFiles('artifacts/supabase-staging-report.json') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: supabase-staging-security-report
           path: artifacts/supabase-staging-report.json

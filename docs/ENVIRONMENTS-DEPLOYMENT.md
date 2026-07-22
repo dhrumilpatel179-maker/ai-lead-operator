@@ -23,6 +23,10 @@
 - Automated database backups, retention/deletion jobs, incident alerts, and audit export.
 - Deployment requires security acceptance and explicit approval to process customer data.
 
+## Supabase database staging
+
+The private manual workflow provisions and tests only the Supabase database, Auth, schema, and RLS controls. It does not deploy the application or change the private demonstration. Billing/capacity safety is enforced through available Management API checks plus a persistent manual approval; it is not described as an API-guaranteed free-tier deployment.
+
 ## Configuration names
 
 Future configuration names may include `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `OPENAI_API_KEY` (server only), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, an OAuth encryption key, `STRIPE_SECRET_KEY`, and tenant-specific webhook secrets. None are required or configured for this milestone; values must never be committed.

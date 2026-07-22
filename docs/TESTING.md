@@ -33,3 +33,5 @@
 ## Release gate
 
 All Red-action, outbound-idempotency, provider-failure, deletion, cross-tenant, applied-RLS integration, backup/restore, and incident-response tests must pass before real customer data or live sending is enabled. The repository security suite does not substitute for testing the unapplied Postgres migration in a real Supabase project.
+
+Run `npm run test:staging` for the staging-provisioning controls. That suite covers initial provisioning gates, recorded-project validation, project-created/migration-not-started recovery, wrong-project rejection, weak and duplicate passwords, safe reruns, paginated Auth lookup, paid-plan/stale-approval rejection, and immutable GitHub Action pins. Hosted Supabase checks validate the database only; they do not deploy or test the web application against Supabase.
