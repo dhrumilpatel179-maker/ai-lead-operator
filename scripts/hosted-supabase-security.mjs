@@ -107,7 +107,10 @@ const userIds = {};
 for (const [name, account] of Object.entries(credentials)) userIds[name] = await ensureUser(account);
 for (const id of Object.values(userIds)) assert.match(id, /^[0-9a-f-]{36}$/i);
 
-const { tenantA, tenantB, leadA, leadB, advisorLead, draftRed } = SYNTHETIC_IDS;
+const {
+  tenantA, tenantB, leadA, leadB, advisorLead, immediateLead,
+  languageLead, attachmentLead, noActionLead, draftRed,
+} = SYNTHETIC_IDS;
 
 await sql(`
 insert into public.tenants (id,name) values
@@ -120,14 +123,38 @@ insert into public.tenant_memberships (tenant_id,user_id,role) values
   ('${tenantA}','${userIds.viewer}','viewer')
 on conflict (tenant_id,user_id) do update set role=excluded.role;
 insert into public.leads
-  (id,tenant_id,name,email,service,symptoms,urgency,source,status,authority,summary,next_action)
+  (id,tenant_id,name,email,service,symptoms,urgency,source,status,authority,
+   escalation_reasons,immediate_escalation,disposition,summary,next_action)
 values
-  ('${leadA}','${tenantA}','Synthetic Customer A','customer.a@example.com','Oil change','Routine oil change','routine','staging','New','green','Synthetic tenant A lead','Review'),
-  ('${leadB}','${tenantB}','Synthetic Customer B','customer.b@example.com','Brakes','Brake noise','soon','staging','New','yellow','Synthetic tenant B lead','Review')
-on conflict (id) do nothing;
+  ('${leadA}','${tenantA}','Synthetic Customer A','customer.a@example.com','Oil change','Routine oil change','routine','staging','New','green','[]'::jsonb,false,'reply','Synthetic tenant A lead','Review'),
+  ('${leadB}','${tenantB}','Synthetic Customer B','customer.b@example.com','Brakes','Brake noise and price question','soon','staging','New','yellow','["Price estimate requires human approval."]'::jsonb,false,'reply','Synthetic tenant B lead','Staff approval'),
+  ('${immediateLead}','${tenantA}','Synthetic Roadside Customer','roadside@example.com','General service inquiry','Car will not start; customer is stranded','urgent','staging','Escalated','red','["A stranded customer requested immediate help."]'::jsonb,true,'reply','Synthetic immediate escalation','Immediate human escalation'),
+  ('${languageLead}','${tenantA}','Synthetic Language Review','language@example.com','Oil change','Supported language is not configured','routine','staging','New','yellow','["Language capability has not been confirmed."]'::jsonb,false,'language_review','Synthetic language review','Staff approval'),
+  ('${attachmentLead}','${tenantA}','Synthetic Attachment Review','attachment@example.com','General service inquiry','Attachment-only warning-light inquiry','soon','staging','New','yellow','["An attachment requires staff review."]'::jsonb,false,'attachment_review','Synthetic attachment review','Staff approval'),
+  ('${noActionLead}','${tenantA}','Synthetic Positive Feedback','feedback@example.com','Customer feedback','Last service was great','routine','staging','Closed','green','[]'::jsonb,false,'no_action','Synthetic positive feedback','No reply needed')
+on conflict (id) do update set
+  tenant_id=excluded.tenant_id,
+  name=excluded.name,
+  email=excluded.email,
+  service=excluded.service,
+  symptoms=excluded.symptoms,
+  urgency=excluded.urgency,
+  source=excluded.source,
+  status=excluded.status,
+  authority=excluded.authority,
+  escalation_reasons=excluded.escalation_reasons,
+  immediate_escalation=excluded.immediate_escalation,
+  disposition=excluded.disposition,
+  summary=excluded.summary,
+  next_action=excluded.next_action;
 insert into public.response_drafts (id,tenant_id,lead_id,body,authority,state)
 values ('${draftRed}','${tenantA}','${leadA}','Guaranteed diagnosis and price','red','blocked')
-on conflict (id) do nothing;
+on conflict (id) do update set
+  tenant_id=excluded.tenant_id,
+  lead_id=excluded.lead_id,
+  body=excluded.body,
+  authority=excluded.authority,
+  state=excluded.state;
 insert into public.audit_events
   (tenant_id,lead_id,actor_type,actor_id,actor_role,action,authority,target_type,target_id,correlation_id,details,event_hash)
 values
@@ -135,6 +162,25 @@ values
   ('${tenantB}','${leadB}','system','staging-provisioner',null,'synthetic_seeded','yellow','lead','${leadB}','staging-seed-b','{"synthetic":true}','pending')
 on conflict (tenant_id,correlation_id,action) do nothing;
 `);
+
+const pilotFieldCheck = await sql(`
+select id, authority, escalation_reasons, immediate_escalation, disposition, status, next_action
+from public.leads
+where id in ('${leadA}','${leadB}','${immediateLead}','${languageLead}','${attachmentLead}','${noActionLead}')
+order by id;
+`);
+const pilotRows = pilotFieldCheck[0]?.result ?? pilotFieldCheck;
+assert.equal(pilotRows.length, 6, "pilot schema fixtures were not upserted deterministically");
+const pilotById = new Map(pilotRows.map((row) => [row.id, row]));
+assert.deepEqual(pilotById.get(leadA)?.escalation_reasons, []);
+assert.deepEqual(pilotById.get(leadB)?.escalation_reasons, ["Price estimate requires human approval."]);
+assert.equal(pilotById.get(immediateLead)?.authority, "red");
+assert.equal(pilotById.get(immediateLead)?.immediate_escalation, true);
+assert.equal(pilotById.get(languageLead)?.disposition, "language_review");
+assert.equal(pilotById.get(attachmentLead)?.disposition, "attachment_review");
+assert.equal(pilotById.get(noActionLead)?.disposition, "no_action");
+assert.equal(pilotById.get(noActionLead)?.status, "Closed");
+assert.equal(pilotById.get(noActionLead)?.next_action, "No reply needed");
 
 async function signIn(account) {
   const session = await request(`${projectUrl}/auth/v1/token?grant_type=password`, {
@@ -184,8 +230,14 @@ const advisorCreated = await rest(
 );
 assert.equal(advisorCreated[0]?.tenant_id, tenantA);
 assert.equal(advisorCreated[0]?.id, advisorLead);
-const advisorRows = await rest(tokens.staff, `leads?id=eq.${advisorLead}&select=id,tenant_id`);
-assert.deepEqual(advisorRows, [{ id: advisorLead, tenant_id: tenantA }], "repeated validation created duplicate advisor leads");
+const advisorRows = await rest(tokens.staff, `leads?id=eq.${advisorLead}&select=id,tenant_id,escalation_reasons,immediate_escalation,disposition`);
+assert.deepEqual(advisorRows, [{
+  id: advisorLead,
+  tenant_id: tenantA,
+  escalation_reasons: [],
+  immediate_escalation: false,
+  disposition: "reply",
+}], "repeated validation created duplicate or stale advisor leads");
 
 await rest(tokens.owner, "response_drafts", "POST", {
   tenant_id: tenantA, lead_id: leadA, body: "Attempted browser bypass", authority: "green", state: "pending",
@@ -212,12 +264,14 @@ select
   (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relrowsecurity and c.relname in ('tenants','tenant_memberships','leads','messages','response_drafts','approval_events','send_operations','follow_ups','audit_events','business_settings'))::int as rls_tables,
   (select count(*) from pg_policies where schemaname='public')::int as policies,
   (select count(*) from pg_trigger where tgname in ('audit_events_immutable','approval_events_immutable','send_operations_immutable') and not tgisinternal)::int as immutable_triggers,
+  (select count(*) from information_schema.columns where table_schema='public' and table_name='leads' and column_name in ('escalation_reasons','immediate_escalation','disposition'))::int as pilot_lead_columns,
   (select environment_marker from public.ai_lead_operator_staging_metadata where singleton=true) as staging_marker;
 `);
 const controlRow = controls[0]?.result?.[0] ?? controls[0];
 assert.equal(Number(controlRow.rls_tables), 10);
 assert.ok(Number(controlRow.policies) >= 12);
 assert.equal(Number(controlRow.immutable_triggers), 3);
+assert.equal(Number(controlRow.pilot_lead_columns), 3);
 assert.equal(controlRow.staging_marker, STAGING_MARKER);
 
 const report = {
@@ -231,6 +285,8 @@ const report = {
     staffWritePolicy: "passed", redDraftBrowserBypass: "passed",
     auditReadIsolationAndImmutability: "passed", transactionRollback: "passed",
     rlsPolicyAndTriggerInventory: "passed", syntheticDataRerunSafety: "passed",
+    pilotLeadSchemaAndFixtures: "passed",
+    repositoryPilotScenarioSuite: "20/20 passed before hosted access",
   },
   integrations: { gmail: false, calendar: false, openai: false, stripe: false, liveMessaging: false, realCustomerData: false },
 };

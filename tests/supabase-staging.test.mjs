@@ -125,6 +125,9 @@ test("repeated validate uses one deterministic conflict-safe advisor lead", () =
   assert.equal(first.body.id, SYNTHETIC_IDS.advisorLead);
   assert.match(first.path, /on_conflict=id/);
   assert.match(first.prefer, /resolution=merge-duplicates/);
+  assert.deepEqual(first.body.escalation_reasons, []);
+  assert.equal(first.body.immediate_escalation, false);
+  assert.equal(first.body.disposition, "reply");
 
   const simulatedRows = new Map();
   for (const run of [first, second]) simulatedRows.set(run.body.id, run.body);
@@ -218,10 +221,41 @@ test("hosted validation prevents duplicate persistent synthetic data", async () 
   assert.doesNotMatch(hosted, /randomUUID/);
   assert.match(hosted, /on conflict \(id\) do update set name=excluded\.name/);
   assert.match(hosted, /on conflict \(tenant_id,user_id\) do update set role=excluded\.role/);
-  assert.match(hosted, /on conflict \(id\) do nothing/);
+  assert.match(hosted, /on conflict \(id\) do update set[\s\S]*escalation_reasons=excluded\.escalation_reasons/);
+  assert.match(hosted, /on conflict \(id\) do update set[\s\S]*state=excluded\.state/);
   assert.match(hosted, /on conflict \(tenant_id,correlation_id,action\) do nothing/);
   assert.match(hosted, /advisorLeadUpsert\(\)/);
-  assert.match(hosted, /repeated validation created duplicate advisor leads/);
+  assert.match(hosted, /repeated validation created duplicate or stale advisor leads/);
+  for (const id of Object.values(SYNTHETIC_IDS)) assert.match(id, /^[0-9a-f-]{36}$/);
+});
+
+test("staging gates the 20 pilot scenarios before secrets and validates the new hosted lead fields", async () => {
+  const [workflow, packageJson, workflowTests, pilotTests, hosted, schema] = await Promise.all([
+    readFile(new URL("../.github/workflows/provision-supabase-staging.yml", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("./workflow.test.ts", import.meta.url), "utf8"),
+    readFile(new URL("./pilot-readiness.test.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/hosted-supabase-security.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../db/supabase-production.sql", import.meta.url), "utf8"),
+  ]);
+  const releaseGateIndex = workflow.indexOf("Run repository release gates");
+  const protectedCommandIndex = workflow.indexOf("Provision, resume, or validate database staging");
+  assert.ok(releaseGateIndex >= 0 && protectedCommandIndex > releaseGateIndex);
+  assert.match(workflow.slice(releaseGateIndex, protectedCommandIndex), /npm test/);
+  assert.match(packageJson.scripts.test, /tests\/workflow\.test\.ts/);
+  assert.match(packageJson.scripts.test, /tests\/pilot-readiness\.test\.ts/);
+  const scenarioSource = `${workflowTests}\n${pilotTests}`;
+  const coveredScenarios = new Set([
+    ...[...scenarioSource.matchAll(/\{ id: (\d+), message:/g)].map((match) => Number(match[1])),
+    ...[...scenarioSource.matchAll(/test\("Claude scenario (\d+):/g)].map((match) => Number(match[1])),
+  ]);
+  assert.deepEqual([...coveredScenarios].sort((a, b) => a - b), Array.from({ length: 20 }, (_, index) => index + 1));
+  for (const column of ["escalation_reasons", "immediate_escalation", "disposition"]) {
+    assert.match(schema, new RegExp(`\\b${column}\\b`));
+    assert.match(hosted, new RegExp(`\\b${column}\\b`));
+  }
+  assert.match(hosted, /pilotLeadSchemaAndFixtures: "passed"/);
+  assert.match(hosted, /repositoryPilotScenarioSuite: "20\/20 passed before hosted access"/);
 });
 
 test("region identity is checked before keys, privileged SQL, or hosted validation", async () => {

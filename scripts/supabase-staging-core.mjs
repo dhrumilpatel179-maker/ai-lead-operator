@@ -11,6 +11,10 @@ export const SYNTHETIC_IDS = Object.freeze({
   leadA: "10000000-0000-4000-8000-000000000101",
   leadB: "20000000-0000-4000-8000-000000000102",
   advisorLead: "10000000-0000-4000-8000-000000000103",
+  immediateLead: "10000000-0000-4000-8000-000000000104",
+  languageLead: "10000000-0000-4000-8000-000000000105",
+  attachmentLead: "10000000-0000-4000-8000-000000000106",
+  noActionLead: "10000000-0000-4000-8000-000000000107",
   draftRed: "10000000-0000-4000-8000-000000000201",
 });
 
@@ -157,6 +161,9 @@ export function advisorLeadUpsert() {
       source: "staging",
       status: "New",
       authority: "green",
+      escalation_reasons: [],
+      immediate_escalation: false,
+      disposition: "reply",
       summary: "Synthetic advisor insert",
       next_action: "Review",
     },
