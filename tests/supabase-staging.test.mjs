@@ -258,6 +258,29 @@ test("staging gates the 20 pilot scenarios before secrets and validates the new 
   assert.match(hosted, /repositoryPilotScenarioSuite: "20\/20 passed before hosted access"/);
 });
 
+test("hosted validation inventories connector foundations without enabling connectors", async () => {
+  const [hosted, schema] = await Promise.all([
+    readFile(new URL("../scripts/hosted-supabase-security.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../db/supabase-production.sql", import.meta.url), "utf8"),
+  ]);
+  for (const table of [
+    "provider_connections",
+    "inbound_provider_events",
+    "consent_records",
+    "provider_send_outbox",
+  ]) {
+    assert.match(schema, new RegExp(`create table public\\.${table}\\b`, "i"));
+    assert.match(schema, new RegExp(`alter table public\\.${table} enable row level security`, "i"));
+    assert.match(hosted, new RegExp(`\\b${table}\\b`));
+  }
+  assert.match(hosted, /assert\.equal\(Number\(controlRow\.rls_tables\), 14\)/);
+  assert.match(hosted, /assert\.equal\(Number\(controlRow\.connector_foundation_tables\), 4\)/);
+  assert.match(hosted, /assert\.equal\(Number\(controlRow\.plaintext_token_columns\), 0\)/);
+  assert.match(hosted, /connectorFoundationSchema: "passed"/);
+  assert.match(hosted, /gmail: false/);
+  assert.match(hosted, /liveMessaging: false/);
+});
+
 test("region identity is checked before keys, privileged SQL, or hosted validation", async () => {
   const provisioner = await readFile(new URL("../scripts/provision-supabase-staging.mjs", import.meta.url), "utf8");
   const hosted = await readFile(new URL("../scripts/hosted-supabase-security.mjs", import.meta.url), "utf8");

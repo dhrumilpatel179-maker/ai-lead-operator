@@ -166,6 +166,220 @@ create table public.business_settings (
   updated_at timestamptz not null default now()
 );
 
+create table public.provider_connections (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  provider text not null,
+  external_account_id text not null,
+  status text not null default 'pending'
+    check (status in ('pending','active','reconnect_required','revoked','error')),
+  granted_scopes jsonb not null default '[]'::jsonb
+    check (jsonb_typeof(granted_scopes) = 'array'),
+  credential_envelope_ciphertext text not null check (length(credential_envelope_ciphertext) > 0),
+  credential_envelope_nonce text not null check (length(credential_envelope_nonce) > 0),
+  credential_envelope_auth_tag text not null check (length(credential_envelope_auth_tag) > 0),
+  credential_key_version text not null check (length(credential_key_version) > 0),
+  gmail_watch_expires_at timestamptz,
+  gmail_history_id text,
+  reconnect_required_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (tenant_id, provider, external_account_id),
+  unique (tenant_id, id),
+  unique (tenant_id, id, provider)
+);
+create index provider_connections_tenant_status_idx
+  on public.provider_connections(tenant_id, status);
+
+create table public.inbound_provider_events (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  connection_id uuid not null,
+  provider text not null,
+  external_event_id text not null,
+  processing_state text not null default 'received'
+    check (processing_state in ('received','processing','processed','failed','rejected')),
+  payload_hash text not null check (payload_hash ~ '^[0-9a-f]{64}$'),
+  non_sensitive_metadata jsonb not null default '{}'::jsonb
+    check (
+      jsonb_typeof(non_sensitive_metadata) = 'object'
+      and octet_length(non_sensitive_metadata::text) <= 2048
+    ),
+  attachment_present boolean not null default false,
+  attachment_count integer not null default 0 check (attachment_count >= 0),
+  received_at timestamptz not null default now(),
+  processed_at timestamptz,
+  deletion_due_at timestamptz not null,
+  failure_classification text,
+  rejection_classification text,
+  foreign key (tenant_id, connection_id, provider)
+    references public.provider_connections(tenant_id, id, provider) on delete cascade,
+  unique (connection_id, external_event_id),
+  check (
+    (attachment_present and attachment_count > 0)
+    or (not attachment_present and attachment_count = 0)
+  ),
+  check (deletion_due_at >= received_at)
+);
+create index inbound_provider_events_tenant_state_idx
+  on public.inbound_provider_events(tenant_id, processing_state);
+create index inbound_provider_events_tenant_deletion_idx
+  on public.inbound_provider_events(tenant_id, deletion_due_at);
+
+create table public.consent_records (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  normalized_customer_identity text not null,
+  channel text not null,
+  status text not null default 'reply_only'
+    check (status in ('reply_only','granted','revoked','suppressed')),
+  source text not null,
+  evidence_metadata jsonb not null default '{}'::jsonb
+    check (
+      jsonb_typeof(evidence_metadata) = 'object'
+      and octet_length(evidence_metadata::text) <= 4096
+    ),
+  recorded_at timestamptz not null default now(),
+  revoked_at timestamptz,
+  updated_at timestamptz not null default now(),
+  check (status <> 'revoked' or revoked_at is not null)
+);
+create index consent_records_tenant_identity_channel_idx
+  on public.consent_records(tenant_id, normalized_customer_identity, channel, recorded_at);
+create index consent_records_tenant_status_idx
+  on public.consent_records(tenant_id, status);
+
+alter table public.approval_events
+  add constraint approval_events_outbox_chain_unique
+  unique (tenant_id, lead_id, draft_id, id);
+
+create table public.provider_send_outbox (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  connection_id uuid not null,
+  lead_id uuid not null,
+  draft_id uuid not null,
+  approval_id uuid not null,
+  idempotency_key text not null,
+  approved_body_hash text not null check (approved_body_hash ~ '^[0-9a-f]{64}$'),
+  state text not null default 'queued'
+    check (state in (
+      'queued','claimed','sending','sent','failed',
+      'needs_reconciliation','cancelled'
+    )),
+  provider_message_id text,
+  attempt_count integer not null default 0 check (attempt_count >= 0),
+  claim_token text,
+  claimed_at timestamptz,
+  claim_expires_at timestamptz,
+  next_attempt_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deletion_due_at timestamptz not null,
+  foreign key (tenant_id, connection_id)
+    references public.provider_connections(tenant_id, id) on delete restrict,
+  foreign key (tenant_id, lead_id, draft_id, approval_id)
+    references public.approval_events(tenant_id, lead_id, draft_id, id) on delete restrict,
+  unique (tenant_id, idempotency_key),
+  unique (tenant_id, approval_id),
+  check (deletion_due_at >= created_at),
+  check (
+    (
+      state in ('claimed','sending')
+      and claim_token is not null
+      and claimed_at is not null
+      and claim_expires_at is not null
+      and claim_expires_at > claimed_at
+    )
+    or (
+      state not in ('claimed','sending')
+      and claim_token is null
+      and claimed_at is null
+      and claim_expires_at is null
+    )
+  )
+);
+create index provider_send_outbox_tenant_state_attempt_idx
+  on public.provider_send_outbox(tenant_id, state, next_attempt_at);
+create index provider_send_outbox_tenant_claim_expiry_idx
+  on public.provider_send_outbox(tenant_id, state, claim_expires_at);
+
+create or replace function public.enforce_provider_send_outbox()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' and not exists (
+    select 1
+    from public.provider_connections connection
+    join public.leads lead
+      on lead.tenant_id = new.tenant_id and lead.id = new.lead_id
+    join public.response_drafts draft
+      on draft.tenant_id = new.tenant_id
+      and draft.id = new.draft_id
+      and draft.lead_id = new.lead_id
+    join public.approval_events approval
+      on approval.tenant_id = new.tenant_id
+      and approval.id = new.approval_id
+      and approval.lead_id = new.lead_id
+      and approval.draft_id = new.draft_id
+    where connection.tenant_id = new.tenant_id
+      and connection.id = new.connection_id
+      and connection.status = 'active'
+      and approval.decision = 'approved'
+      and approval.body_hash = new.approved_body_hash
+  ) then
+    raise exception 'provider outbox tenant or approval chain mismatch';
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if new.tenant_id <> old.tenant_id
+      or new.connection_id <> old.connection_id
+      or new.lead_id <> old.lead_id
+      or new.draft_id <> old.draft_id
+      or new.approval_id <> old.approval_id
+      or new.idempotency_key <> old.idempotency_key then
+      raise exception 'provider outbox relationship is immutable';
+    end if;
+    if new.approved_body_hash <> old.approved_body_hash then
+      raise exception 'approved body hash is immutable';
+    end if;
+    if old.state in ('claimed','sending')
+      and new.state = old.state
+      and (
+        new.claim_token is distinct from old.claim_token
+        or new.claimed_at is distinct from old.claimed_at
+        or new.claim_expires_at is distinct from old.claim_expires_at
+      ) then
+      raise exception 'provider outbox claim is already held';
+    end if;
+    if new.state <> old.state and not (
+      (old.state = 'queued' and new.state in ('claimed','cancelled'))
+      or (old.state = 'claimed' and new.state in ('sending','failed','cancelled'))
+      or (
+        old.state = 'claimed'
+        and new.state = 'queued'
+        and old.claim_expires_at <= new.updated_at
+      )
+      or (old.state = 'sending' and new.state in ('sent','failed','needs_reconciliation'))
+      or (old.state = 'failed' and new.state in ('queued','cancelled'))
+      or (old.state = 'needs_reconciliation' and new.state in ('sent','failed','cancelled'))
+    ) then
+      raise exception 'illegal provider outbox state transition';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.enforce_provider_send_outbox() from public;
+
+create trigger provider_send_outbox_enforce
+before insert or update on public.provider_send_outbox
+for each row execute function public.enforce_provider_send_outbox();
+
 create or replace function public.current_tenant_role(target_tenant uuid)
 returns text
 language sql
@@ -264,6 +478,10 @@ alter table public.send_operations enable row level security;
 alter table public.follow_ups enable row level security;
 alter table public.audit_events enable row level security;
 alter table public.business_settings enable row level security;
+alter table public.provider_connections enable row level security;
+alter table public.inbound_provider_events enable row level security;
+alter table public.consent_records enable row level security;
+alter table public.provider_send_outbox enable row level security;
 
 create policy tenants_member_select on public.tenants
   for select to authenticated using (public.is_tenant_member(id));
@@ -293,15 +511,27 @@ create policy audit_member_select on public.audit_events
   for select to authenticated using (public.is_tenant_member(tenant_id));
 create policy settings_member_select on public.business_settings
   for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy provider_connections_member_select on public.provider_connections
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy inbound_provider_events_member_select on public.inbound_provider_events
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy consent_records_member_select on public.consent_records
+  for select to authenticated using (public.is_tenant_member(tenant_id));
+create policy provider_send_outbox_member_select on public.provider_send_outbox
+  for select to authenticated using (public.is_tenant_member(tenant_id));
 
 -- Browser JWTs may read their tenant and mutate ordinary lead records only when
 -- their role permits. Draft state, approvals, sends, follow-ups, audit events,
 -- settings, and memberships have no browser write policy and are server-only.
 revoke all on public.tenant_memberships, public.messages, public.response_drafts,
   public.approval_events, public.send_operations, public.follow_ups,
-  public.audit_events, public.business_settings from anon, authenticated;
+  public.audit_events, public.business_settings, public.provider_connections,
+  public.inbound_provider_events, public.consent_records,
+  public.provider_send_outbox from anon, authenticated;
 grant select on public.tenant_memberships, public.messages, public.response_drafts,
   public.approval_events, public.send_operations, public.follow_ups,
-  public.audit_events, public.business_settings to authenticated;
+  public.audit_events, public.business_settings, public.provider_connections,
+  public.inbound_provider_events, public.consent_records,
+  public.provider_send_outbox to authenticated;
 grant select, insert, update on public.leads to authenticated;
 grant select on public.tenants to authenticated;

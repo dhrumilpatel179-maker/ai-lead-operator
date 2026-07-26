@@ -261,17 +261,23 @@ assert.equal(Number(rollbackRow.count), 0, "failed transaction persisted data");
 
 const controls = await sql(`
 select
-  (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relrowsecurity and c.relname in ('tenants','tenant_memberships','leads','messages','response_drafts','approval_events','send_operations','follow_ups','audit_events','business_settings'))::int as rls_tables,
+  (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relrowsecurity and c.relname in ('tenants','tenant_memberships','leads','messages','response_drafts','approval_events','send_operations','follow_ups','audit_events','business_settings','provider_connections','inbound_provider_events','consent_records','provider_send_outbox'))::int as rls_tables,
   (select count(*) from pg_policies where schemaname='public')::int as policies,
   (select count(*) from pg_trigger where tgname in ('audit_events_immutable','approval_events_immutable','send_operations_immutable') and not tgisinternal)::int as immutable_triggers,
   (select count(*) from information_schema.columns where table_schema='public' and table_name='leads' and column_name in ('escalation_reasons','immediate_escalation','disposition'))::int as pilot_lead_columns,
+  (select count(*) from information_schema.tables where table_schema='public' and table_name in ('provider_connections','inbound_provider_events','consent_records','provider_send_outbox'))::int as connector_foundation_tables,
+  (select count(*) from information_schema.columns where table_schema='public' and table_name='provider_connections' and column_name in ('access_token','refresh_token','plaintext_access_token','plaintext_refresh_token'))::int as plaintext_token_columns,
+  (select count(*) from pg_trigger where tgname='provider_send_outbox_enforce' and not tgisinternal)::int as provider_outbox_triggers,
   (select environment_marker from public.ai_lead_operator_staging_metadata where singleton=true) as staging_marker;
 `);
 const controlRow = controls[0]?.result?.[0] ?? controls[0];
-assert.equal(Number(controlRow.rls_tables), 10);
-assert.ok(Number(controlRow.policies) >= 12);
+assert.equal(Number(controlRow.rls_tables), 14);
+assert.ok(Number(controlRow.policies) >= 16);
 assert.equal(Number(controlRow.immutable_triggers), 3);
 assert.equal(Number(controlRow.pilot_lead_columns), 3);
+assert.equal(Number(controlRow.connector_foundation_tables), 4);
+assert.equal(Number(controlRow.plaintext_token_columns), 0);
+assert.equal(Number(controlRow.provider_outbox_triggers), 1);
 assert.equal(controlRow.staging_marker, STAGING_MARKER);
 
 const report = {
@@ -286,6 +292,7 @@ const report = {
     auditReadIsolationAndImmutability: "passed", transactionRollback: "passed",
     rlsPolicyAndTriggerInventory: "passed", syntheticDataRerunSafety: "passed",
     pilotLeadSchemaAndFixtures: "passed",
+    connectorFoundationSchema: "passed",
     repositoryPilotScenarioSuite: "20/20 passed before hosted access",
   },
   integrations: { gmail: false, calendar: false, openai: false, stripe: false, liveMessaging: false, realCustomerData: false },
