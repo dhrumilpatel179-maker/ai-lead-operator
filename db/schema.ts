@@ -182,10 +182,10 @@ export const providerConnections = sqliteTable("provider_connections", {
   externalAccountId: text("external_account_id").notNull(),
   status: text("status", { enum: providerConnectionStatuses }).notNull().default("pending"),
   grantedScopesJson: text("granted_scopes_json").notNull().default("[]"),
-  credentialEnvelopeCiphertext: text("credential_envelope_ciphertext").notNull(),
-  credentialEnvelopeNonce: text("credential_envelope_nonce").notNull(),
-  credentialEnvelopeAuthTag: text("credential_envelope_auth_tag").notNull(),
-  credentialKeyVersion: text("credential_key_version").notNull(),
+  credentialEnvelopeCiphertext: text("credential_envelope_ciphertext"),
+  credentialEnvelopeNonce: text("credential_envelope_nonce"),
+  credentialEnvelopeAuthTag: text("credential_envelope_auth_tag"),
+  credentialKeyVersion: text("credential_key_version"),
   gmailWatchExpiresAt: text("gmail_watch_expires_at"),
   gmailHistoryId: text("gmail_history_id"),
   reconnectRequiredAt: text("reconnect_required_at"),
@@ -215,10 +215,23 @@ export const providerConnections = sqliteTable("provider_connections", {
   ),
   check(
     "provider_connections_envelope_check",
-    sql`length(${table.credentialEnvelopeCiphertext}) > 0
+    sql`(
+      ${table.status} = 'pending'
+      and ${table.credentialEnvelopeCiphertext} is null
+      and ${table.credentialEnvelopeNonce} is null
+      and ${table.credentialEnvelopeAuthTag} is null
+      and ${table.credentialKeyVersion} is null
+    ) or (
+      ${table.status} <> 'pending'
+      and ${table.credentialEnvelopeCiphertext} is not null
+      and ${table.credentialEnvelopeNonce} is not null
+      and ${table.credentialEnvelopeAuthTag} is not null
+      and ${table.credentialKeyVersion} is not null
+      and length(${table.credentialEnvelopeCiphertext}) > 0
       and length(${table.credentialEnvelopeNonce}) > 0
       and length(${table.credentialEnvelopeAuthTag}) > 0
-      and length(${table.credentialKeyVersion}) > 0`,
+      and length(${table.credentialKeyVersion}) > 0
+    )`,
   ),
 ]);
 

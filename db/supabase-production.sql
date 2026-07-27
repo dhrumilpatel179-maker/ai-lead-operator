@@ -175,10 +175,10 @@ create table public.provider_connections (
     check (status in ('pending','active','reconnect_required','revoked','error')),
   granted_scopes jsonb not null default '[]'::jsonb
     check (jsonb_typeof(granted_scopes) = 'array'),
-  credential_envelope_ciphertext text not null check (length(credential_envelope_ciphertext) > 0),
-  credential_envelope_nonce text not null check (length(credential_envelope_nonce) > 0),
-  credential_envelope_auth_tag text not null check (length(credential_envelope_auth_tag) > 0),
-  credential_key_version text not null check (length(credential_key_version) > 0),
+  credential_envelope_ciphertext text,
+  credential_envelope_nonce text,
+  credential_envelope_auth_tag text,
+  credential_key_version text,
   gmail_watch_expires_at timestamptz,
   gmail_history_id text,
   reconnect_required_at timestamptz,
@@ -187,7 +187,27 @@ create table public.provider_connections (
   updated_at timestamptz not null default now(),
   unique (tenant_id, provider, external_account_id),
   unique (tenant_id, id),
-  unique (tenant_id, id, provider)
+  unique (tenant_id, id, provider),
+  check (
+    (
+      status = 'pending'
+      and credential_envelope_ciphertext is null
+      and credential_envelope_nonce is null
+      and credential_envelope_auth_tag is null
+      and credential_key_version is null
+    )
+    or (
+      status <> 'pending'
+      and credential_envelope_ciphertext is not null
+      and credential_envelope_nonce is not null
+      and credential_envelope_auth_tag is not null
+      and credential_key_version is not null
+      and length(credential_envelope_ciphertext) > 0
+      and length(credential_envelope_nonce) > 0
+      and length(credential_envelope_auth_tag) > 0
+      and length(credential_key_version) > 0
+    )
+  )
 );
 create index provider_connections_tenant_status_idx
   on public.provider_connections(tenant_id, status);
@@ -406,6 +426,48 @@ $$;
 revoke all on function public.is_tenant_member(uuid) from public;
 grant execute on function public.is_tenant_member(uuid) to authenticated;
 
+-- Browser clients may list only tenant-scoped connection metadata through this
+-- function. The table itself, including Gmail history and credential-envelope
+-- columns, remains unavailable to authenticated and anonymous roles.
+create or replace function public.list_provider_connection_metadata()
+returns table (
+  connection_id uuid,
+  tenant_id uuid,
+  provider text,
+  external_account_id text,
+  status text,
+  granted_scopes jsonb,
+  watch_expires_at timestamptz,
+  reconnect_required_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    connection.id,
+    connection.tenant_id,
+    connection.provider,
+    connection.external_account_id,
+    connection.status,
+    connection.granted_scopes,
+    connection.gmail_watch_expires_at,
+    connection.reconnect_required_at,
+    connection.revoked_at,
+    connection.created_at,
+    connection.updated_at
+  from public.provider_connections connection
+  where public.is_tenant_member(connection.tenant_id)
+$$;
+revoke all on function public.list_provider_connection_metadata()
+  from public, anon, authenticated;
+grant execute on function public.list_provider_connection_metadata()
+  to authenticated;
+
 create or replace function public.can_write_tenant(target_tenant uuid)
 returns boolean
 language sql
@@ -511,8 +573,6 @@ create policy audit_member_select on public.audit_events
   for select to authenticated using (public.is_tenant_member(tenant_id));
 create policy settings_member_select on public.business_settings
   for select to authenticated using (public.is_tenant_member(tenant_id));
-create policy provider_connections_member_select on public.provider_connections
-  for select to authenticated using (public.is_tenant_member(tenant_id));
 create policy inbound_provider_events_member_select on public.inbound_provider_events
   for select to authenticated using (public.is_tenant_member(tenant_id));
 create policy consent_records_member_select on public.consent_records
@@ -520,9 +580,10 @@ create policy consent_records_member_select on public.consent_records
 create policy provider_send_outbox_member_select on public.provider_send_outbox
   for select to authenticated using (public.is_tenant_member(tenant_id));
 
--- Browser JWTs may read their tenant and mutate ordinary lead records only when
--- their role permits. Draft state, approvals, sends, follow-ups, audit events,
--- settings, and memberships have no browser write policy and are server-only.
+-- Browser JWTs may read their tenant, use the safe provider-connection metadata
+-- function, and mutate ordinary lead records only when their role permits.
+-- Credential envelopes, Gmail history metadata, draft state, approvals, sends,
+-- follow-ups, audit events, settings, and memberships remain server-only.
 revoke all on public.tenant_memberships, public.messages, public.response_drafts,
   public.approval_events, public.send_operations, public.follow_ups,
   public.audit_events, public.business_settings, public.provider_connections,
@@ -530,8 +591,13 @@ revoke all on public.tenant_memberships, public.messages, public.response_drafts
   public.provider_send_outbox from anon, authenticated;
 grant select on public.tenant_memberships, public.messages, public.response_drafts,
   public.approval_events, public.send_operations, public.follow_ups,
-  public.audit_events, public.business_settings, public.provider_connections,
-  public.inbound_provider_events, public.consent_records,
+  public.audit_events, public.business_settings, public.inbound_provider_events,
+  public.consent_records,
   public.provider_send_outbox to authenticated;
 grant select, insert, update on public.leads to authenticated;
 grant select on public.tenants to authenticated;
+
+-- Connector workers use a server-held service-role credential and access the
+-- base table directly. No equivalent browser grant or write policy exists.
+grant select, insert, update, delete on public.provider_connections
+  to service_role;

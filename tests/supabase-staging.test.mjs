@@ -277,8 +277,67 @@ test("hosted validation inventories connector foundations without enabling conne
   assert.match(hosted, /assert\.equal\(Number\(controlRow\.connector_foundation_tables\), 4\)/);
   assert.match(hosted, /assert\.equal\(Number\(controlRow\.plaintext_token_columns\), 0\)/);
   assert.match(hosted, /connectorFoundationSchema: "passed"/);
+  assert.match(hosted, /providerConnectionMetadataIsolation: "passed"/);
   assert.match(hosted, /gmail: false/);
   assert.match(hosted, /liveMessaging: false/);
+});
+
+test("provider credential envelopes are server-only and metadata is safely projected", async () => {
+  const [hosted, schema] = await Promise.all([
+    readFile(new URL("../scripts/hosted-supabase-security.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../db/supabase-production.sql", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(
+    schema,
+    /create policy\s+provider_connections_member_select\s+on\s+public\.provider_connections/i,
+  );
+  const authenticatedSelectGrants = [
+    ...schema.matchAll(/grant select on([\s\S]*?)to authenticated;/gi),
+  ].map((match) => match[1]);
+  assert.equal(
+    authenticatedSelectGrants.some((grant) => /\bpublic\.provider_connections\b/i.test(grant)),
+    false,
+  );
+  assert.match(
+    schema,
+    /grant select, insert, update, delete on public\.provider_connections\s+to service_role;/i,
+  );
+  const projection = schema.match(
+    /create or replace function public\.list_provider_connection_metadata\(\)[\s\S]*?\$\$;/i,
+  )?.[0];
+  assert.ok(projection, "safe provider connection metadata function is missing");
+  for (const field of [
+    "connection_id uuid",
+    "tenant_id uuid",
+    "provider text",
+    "external_account_id text",
+    "status text",
+    "granted_scopes jsonb",
+    "watch_expires_at timestamptz",
+    "reconnect_required_at timestamptz",
+    "revoked_at timestamptz",
+    "created_at timestamptz",
+    "updated_at timestamptz",
+  ]) {
+    assert.match(projection, new RegExp(`\\b${field.replace(" ", "\\s+")}\\b`, "i"));
+  }
+  for (const forbidden of [
+    "credential_envelope_ciphertext",
+    "credential_envelope_nonce",
+    "credential_envelope_auth_tag",
+    "credential_key_version",
+    "gmail_history_id",
+  ]) {
+    assert.doesNotMatch(projection, new RegExp(`\\b${forbidden}\\b`, "i"));
+  }
+  assert.match(projection, /where public\.is_tenant_member\(connection\.tenant_id\)/i);
+  assert.match(hosted, /provider_connections\?select=id,tenant_id,credential_envelope_ciphertext/);
+  assert.match(hosted, /\[401, 403\]/);
+  assert.match(hosted, /owner could read cross-tenant connection metadata/);
+  assert.match(hosted, /connection metadata projection exposed an unexpected field/);
+  assert.match(hosted, /provider_connection_browser_select_policies\), 0/);
+  assert.match(hosted, /provider_connection_browser_select_grant, false/);
+  assert.match(hosted, /provider_connection_service_access, true/);
 });
 
 test("region identity is checked before keys, privileged SQL, or hosted validation", async () => {

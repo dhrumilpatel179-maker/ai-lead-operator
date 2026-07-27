@@ -323,6 +323,64 @@ test("provider connection schema contains no plaintext token fields", () => {
   assert.ok(columns.includes("credential_key_version"));
 });
 
+test("pending provider connections contain no credential placeholders", () => {
+  const database = createDatabase();
+  seedTenant(database, "tenant_pending");
+  database.prepare(`
+    INSERT INTO provider_connections (
+      id, tenant_id, provider, external_account_id, status, granted_scopes_json,
+      created_at, updated_at
+    ) VALUES (
+      'connection_pending', 'tenant_pending', 'gmail', 'synthetic-pending',
+      'pending', '[]', ?, ?
+    )
+  `).run(NOW, NOW);
+  const row = database.prepare(`
+    SELECT
+      credential_envelope_ciphertext AS ciphertext,
+      credential_envelope_nonce AS nonce,
+      credential_envelope_auth_tag AS authTag,
+      credential_key_version AS keyVersion
+    FROM provider_connections
+    WHERE id = 'connection_pending'
+  `).get() as {
+    ciphertext: string | null;
+    nonce: string | null;
+    authTag: string | null;
+    keyVersion: string | null;
+  };
+  assert.deepEqual({ ...row }, {
+    ciphertext: null,
+    nonce: null,
+    authTag: null,
+    keyVersion: null,
+  });
+  assert.throws(
+    () => database.prepare(`
+      INSERT INTO provider_connections (
+        id, tenant_id, provider, external_account_id, status, granted_scopes_json,
+        created_at, updated_at
+      ) VALUES (
+        'connection_active_without_envelope', 'tenant_pending', 'gmail',
+        'synthetic-active', 'active', '[]', ?, ?
+      )
+    `).run(NOW, NOW),
+    /provider_connections_envelope_check/,
+  );
+  assert.throws(
+    () => database.prepare(`
+      INSERT INTO provider_connections (
+        id, tenant_id, provider, external_account_id, status, granted_scopes_json,
+        credential_envelope_ciphertext, created_at, updated_at
+      ) VALUES (
+        'connection_pending_partial_envelope', 'tenant_pending', 'gmail',
+        'synthetic-partial', 'pending', '[]', 'not-allowed', ?, ?
+      )
+    `).run(NOW, NOW),
+    /provider_connections_envelope_check/,
+  );
+});
+
 test("approved body hash is immutable", async () => {
   const { database, chain, repository } = setup();
   const row = await repository.enqueueProviderSend(outboxInput("tenant_a", chain, "a"));

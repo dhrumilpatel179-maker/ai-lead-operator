@@ -16,6 +16,8 @@ export const SYNTHETIC_IDS = Object.freeze({
   attachmentLead: "10000000-0000-4000-8000-000000000106",
   noActionLead: "10000000-0000-4000-8000-000000000107",
   draftRed: "10000000-0000-4000-8000-000000000201",
+  connectionA: "10000000-0000-4000-8000-000000000301",
+  connectionB: "20000000-0000-4000-8000-000000000302",
 });
 
 const inactiveStatuses = new Set(["INACTIVE", "PAUSED", "REMOVED"]);

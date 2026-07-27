@@ -35,6 +35,16 @@ flowchart TD
 ## Key boundaries
 
 - Browser code never receives database service credentials or OAuth refresh tokens.
+- Browser-authenticated members cannot select `provider_connections`; they can
+  call only the tenant-filtered `list_provider_connection_metadata()` read
+  projection, which omits every credential-envelope field and Gmail history ID.
+- A pre-OAuth connection may exist only in `pending` state with all credential
+  envelope fields `NULL`. Any non-pending connection must contain a complete
+  ciphertext, nonce, authentication tag, and key version. Never insert
+  placeholder ciphertext or a partially populated envelope.
+- Connector workers access the credential-bearing base table only with a
+  server-held service-role credential; browser roles receive no table grant or
+  write policy.
 - Every repository operation takes a tenant identifier from authenticated server context, never from an untrusted request body.
 - All outbound messages pass the authority gate before the send adapter.
 - AI output is treated as untrusted structured input and validated before storage or action.

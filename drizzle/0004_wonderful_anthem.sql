@@ -57,10 +57,10 @@ CREATE TABLE `provider_connections` (
 	`external_account_id` text NOT NULL,
 	`status` text DEFAULT 'pending' NOT NULL,
 	`granted_scopes_json` text DEFAULT '[]' NOT NULL,
-	`credential_envelope_ciphertext` text NOT NULL,
-	`credential_envelope_nonce` text NOT NULL,
-	`credential_envelope_auth_tag` text NOT NULL,
-	`credential_key_version` text NOT NULL,
+	`credential_envelope_ciphertext` text,
+	`credential_envelope_nonce` text,
+	`credential_envelope_auth_tag` text,
+	`credential_key_version` text,
 	`gmail_watch_expires_at` text,
 	`gmail_history_id` text,
 	`reconnect_required_at` text,
@@ -70,10 +70,23 @@ CREATE TABLE `provider_connections` (
 	FOREIGN KEY (`tenant_id`) REFERENCES `tenants`(`id`) ON UPDATE no action ON DELETE cascade,
 	CONSTRAINT "provider_connections_status_check" CHECK("provider_connections"."status" in ('pending','active','reconnect_required','revoked','error')),
 	CONSTRAINT "provider_connections_scopes_json_check" CHECK(json_valid("provider_connections"."granted_scopes_json") and json_type("provider_connections"."granted_scopes_json") = 'array'),
-	CONSTRAINT "provider_connections_envelope_check" CHECK(length("provider_connections"."credential_envelope_ciphertext") > 0
+	CONSTRAINT "provider_connections_envelope_check" CHECK((
+      "provider_connections"."status" = 'pending'
+      and "provider_connections"."credential_envelope_ciphertext" is null
+      and "provider_connections"."credential_envelope_nonce" is null
+      and "provider_connections"."credential_envelope_auth_tag" is null
+      and "provider_connections"."credential_key_version" is null
+    ) or (
+      "provider_connections"."status" <> 'pending'
+      and "provider_connections"."credential_envelope_ciphertext" is not null
+      and "provider_connections"."credential_envelope_nonce" is not null
+      and "provider_connections"."credential_envelope_auth_tag" is not null
+      and "provider_connections"."credential_key_version" is not null
+      and length("provider_connections"."credential_envelope_ciphertext") > 0
       and length("provider_connections"."credential_envelope_nonce") > 0
       and length("provider_connections"."credential_envelope_auth_tag") > 0
-      and length("provider_connections"."credential_key_version") > 0)
+      and length("provider_connections"."credential_key_version") > 0
+    ))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `provider_connections_tenant_account_idx` ON `provider_connections` (`tenant_id`,`provider`,`external_account_id`);--> statement-breakpoint

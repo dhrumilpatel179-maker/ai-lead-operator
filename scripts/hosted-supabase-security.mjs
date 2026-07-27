@@ -110,6 +110,7 @@ for (const id of Object.values(userIds)) assert.match(id, /^[0-9a-f-]{36}$/i);
 const {
   tenantA, tenantB, leadA, leadB, advisorLead, immediateLead,
   languageLead, attachmentLead, noActionLead, draftRed,
+  connectionA, connectionB,
 } = SYNTHETIC_IDS;
 
 await sql(`
@@ -122,6 +123,27 @@ insert into public.tenant_memberships (tenant_id,user_id,role) values
   ('${tenantA}','${userIds.staff}','advisor'),
   ('${tenantA}','${userIds.viewer}','viewer')
 on conflict (tenant_id,user_id) do update set role=excluded.role;
+insert into public.provider_connections
+  (id,tenant_id,provider,external_account_id,status,granted_scopes,
+   credential_envelope_ciphertext,credential_envelope_nonce,
+   credential_envelope_auth_tag,credential_key_version,created_at,updated_at)
+values
+  ('${connectionA}','${tenantA}','gmail','synthetic-account-a','pending','[]'::jsonb,
+   null,null,null,null,'2026-07-22T00:00:00Z','2026-07-22T00:00:00Z'),
+  ('${connectionB}','${tenantB}','gmail','synthetic-account-b','pending','[]'::jsonb,
+   null,null,null,null,'2026-07-22T00:00:00Z','2026-07-22T00:00:00Z')
+on conflict (id) do update set
+  tenant_id=excluded.tenant_id,
+  provider=excluded.provider,
+  external_account_id=excluded.external_account_id,
+  status=excluded.status,
+  granted_scopes=excluded.granted_scopes,
+  credential_envelope_ciphertext=null,
+  credential_envelope_nonce=null,
+  credential_envelope_auth_tag=null,
+  credential_key_version=null,
+  created_at=excluded.created_at,
+  updated_at=excluded.updated_at;
 insert into public.leads
   (id,tenant_id,name,email,service,symptoms,urgency,source,status,authority,
    escalation_reasons,immediate_escalation,disposition,summary,next_action)
@@ -213,6 +235,47 @@ assert.ok(ownerLeads.length >= 1 && ownerLeads.every((lead) => lead.tenant_id ==
 const viewerLeads = await rest(tokens.viewer, "leads?select=id,tenant_id");
 assert.ok(viewerLeads.length >= 1 && viewerLeads.every((lead) => lead.tenant_id === tenantA));
 
+await rest(
+  tokens.owner,
+  "provider_connections?select=id,tenant_id,credential_envelope_ciphertext,credential_envelope_nonce,credential_envelope_auth_tag,credential_key_version",
+  "GET",
+  undefined,
+  [401, 403],
+);
+const ownerConnectionMetadata = await rest(
+  tokens.owner,
+  "rpc/list_provider_connection_metadata",
+  "POST",
+  {},
+);
+assert.deepEqual(ownerConnectionMetadata, [{
+  connection_id: connectionA,
+  tenant_id: tenantA,
+  provider: "gmail",
+  external_account_id: "synthetic-account-a",
+  status: "pending",
+  granted_scopes: [],
+  watch_expires_at: null,
+  reconnect_required_at: null,
+  revoked_at: null,
+  created_at: "2026-07-22T00:00:00+00:00",
+  updated_at: "2026-07-22T00:00:00+00:00",
+}], "safe connection metadata must be tenant-scoped and omit credential-envelope fields");
+assert.deepEqual(
+  Object.keys(ownerConnectionMetadata[0]).sort(),
+  [
+    "connection_id", "created_at", "external_account_id", "granted_scopes",
+    "provider", "reconnect_required_at", "revoked_at", "status", "tenant_id",
+    "updated_at", "watch_expires_at",
+  ].sort(),
+  "connection metadata projection exposed an unexpected field",
+);
+assert.equal(
+  ownerConnectionMetadata.some((connection) => connection.tenant_id === tenantB),
+  false,
+  "owner could read cross-tenant connection metadata",
+);
+
 await rest(tokens.viewer, "leads", "POST", {
   tenant_id: tenantA, name: "Blocked viewer write", email: "blocked@example.com",
   service: "Test", symptoms: "Synthetic", urgency: "routine", source: "staging",
@@ -267,16 +330,29 @@ select
   (select count(*) from information_schema.columns where table_schema='public' and table_name='leads' and column_name in ('escalation_reasons','immediate_escalation','disposition'))::int as pilot_lead_columns,
   (select count(*) from information_schema.tables where table_schema='public' and table_name in ('provider_connections','inbound_provider_events','consent_records','provider_send_outbox'))::int as connector_foundation_tables,
   (select count(*) from information_schema.columns where table_schema='public' and table_name='provider_connections' and column_name in ('access_token','refresh_token','plaintext_access_token','plaintext_refresh_token'))::int as plaintext_token_columns,
+  (select count(*) from pg_policies where schemaname='public' and tablename='provider_connections' and cmd='SELECT' and 'authenticated'=any(roles))::int as provider_connection_browser_select_policies,
+  has_table_privilege('authenticated','public.provider_connections','SELECT') as provider_connection_browser_select_grant,
+  has_function_privilege('authenticated','public.list_provider_connection_metadata()','EXECUTE') as provider_connection_metadata_execute,
+  (
+    has_table_privilege('service_role','public.provider_connections','SELECT')
+    and has_table_privilege('service_role','public.provider_connections','INSERT')
+    and has_table_privilege('service_role','public.provider_connections','UPDATE')
+    and has_table_privilege('service_role','public.provider_connections','DELETE')
+  ) as provider_connection_service_access,
   (select count(*) from pg_trigger where tgname='provider_send_outbox_enforce' and not tgisinternal)::int as provider_outbox_triggers,
   (select environment_marker from public.ai_lead_operator_staging_metadata where singleton=true) as staging_marker;
 `);
 const controlRow = controls[0]?.result?.[0] ?? controls[0];
 assert.equal(Number(controlRow.rls_tables), 14);
-assert.ok(Number(controlRow.policies) >= 16);
+assert.ok(Number(controlRow.policies) >= 15);
 assert.equal(Number(controlRow.immutable_triggers), 3);
 assert.equal(Number(controlRow.pilot_lead_columns), 3);
 assert.equal(Number(controlRow.connector_foundation_tables), 4);
 assert.equal(Number(controlRow.plaintext_token_columns), 0);
+assert.equal(Number(controlRow.provider_connection_browser_select_policies), 0);
+assert.equal(controlRow.provider_connection_browser_select_grant, false);
+assert.equal(controlRow.provider_connection_metadata_execute, true);
+assert.equal(controlRow.provider_connection_service_access, true);
 assert.equal(Number(controlRow.provider_outbox_triggers), 1);
 assert.equal(controlRow.staging_marker, STAGING_MARKER);
 
@@ -293,6 +369,7 @@ const report = {
     rlsPolicyAndTriggerInventory: "passed", syntheticDataRerunSafety: "passed",
     pilotLeadSchemaAndFixtures: "passed",
     connectorFoundationSchema: "passed",
+    providerConnectionMetadataIsolation: "passed",
     repositoryPilotScenarioSuite: "20/20 passed before hosted access",
   },
   integrations: { gmail: false, calendar: false, openai: false, stripe: false, liveMessaging: false, realCustomerData: false },

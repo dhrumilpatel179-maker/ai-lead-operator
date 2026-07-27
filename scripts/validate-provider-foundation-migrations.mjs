@@ -77,6 +77,18 @@ for (const table of [
   assert.match(postgres, new RegExp(`alter table public\\.${table} enable row level security`, "i"));
 }
 assert.doesNotMatch(postgres, /\b(access_token|refresh_token)\b/i);
+assert.doesNotMatch(
+  postgres,
+  /create policy\s+provider_connections_member_select\s+on\s+public\.provider_connections/i,
+);
+assert.match(
+  postgres,
+  /create or replace function public\.list_provider_connection_metadata\(\)/i,
+);
+assert.match(
+  postgres,
+  /grant select, insert, update, delete on public\.provider_connections\s+to service_role;/i,
+);
 assert.match(postgres, /unique \(connection_id, external_event_id\)/i);
 assert.match(postgres, /unique \(tenant_id, idempotency_key\)/i);
 assert.match(postgres, /unique \(tenant_id, approval_id\)/i);
