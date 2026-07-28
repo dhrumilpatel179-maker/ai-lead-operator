@@ -326,6 +326,7 @@ test("provider credential envelopes are server-only and metadata is safely proje
     "credential_envelope_nonce",
     "credential_envelope_auth_tag",
     "credential_key_version",
+    "credential_schema_version",
     "gmail_history_id",
   ]) {
     assert.doesNotMatch(projection, new RegExp(`\\b${forbidden}\\b`, "i"));

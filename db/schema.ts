@@ -186,6 +186,7 @@ export const providerConnections = sqliteTable("provider_connections", {
   credentialEnvelopeNonce: text("credential_envelope_nonce"),
   credentialEnvelopeAuthTag: text("credential_envelope_auth_tag"),
   credentialKeyVersion: text("credential_key_version"),
+  credentialSchemaVersion: integer("credential_schema_version"),
   gmailWatchExpiresAt: text("gmail_watch_expires_at"),
   gmailHistoryId: text("gmail_history_id"),
   reconnectRequiredAt: text("reconnect_required_at"),
@@ -216,21 +217,49 @@ export const providerConnections = sqliteTable("provider_connections", {
   check(
     "provider_connections_envelope_check",
     sql`(
-      ${table.status} = 'pending'
+      ${table.status} in ('pending','revoked')
       and ${table.credentialEnvelopeCiphertext} is null
       and ${table.credentialEnvelopeNonce} is null
       and ${table.credentialEnvelopeAuthTag} is null
       and ${table.credentialKeyVersion} is null
+      and ${table.credentialSchemaVersion} is null
     ) or (
-      ${table.status} <> 'pending'
+      ${table.status} in ('active','reconnect_required','error')
       and ${table.credentialEnvelopeCiphertext} is not null
       and ${table.credentialEnvelopeNonce} is not null
       and ${table.credentialEnvelopeAuthTag} is not null
       and ${table.credentialKeyVersion} is not null
+      and ${table.credentialSchemaVersion} is not null
       and length(${table.credentialEnvelopeCiphertext}) > 0
       and length(${table.credentialEnvelopeNonce}) > 0
       and length(${table.credentialEnvelopeAuthTag}) > 0
       and length(${table.credentialKeyVersion}) > 0
+      and ${table.credentialSchemaVersion} > 0
+    ) or (
+      ${table.status} in ('reconnect_required','error')
+      and ${table.credentialEnvelopeCiphertext} is null
+      and ${table.credentialEnvelopeNonce} is null
+      and ${table.credentialEnvelopeAuthTag} is null
+      and ${table.credentialKeyVersion} is null
+      and ${table.credentialSchemaVersion} is null
+    )`,
+  ),
+  check(
+    "provider_connections_lifecycle_timestamp_check",
+    sql`(
+      ${table.status} = 'pending'
+      and ${table.reconnectRequiredAt} is null
+      and ${table.revokedAt} is null
+    ) or (
+      ${table.status} = 'reconnect_required'
+      and ${table.reconnectRequiredAt} is not null
+      and ${table.revokedAt} is null
+    ) or (
+      ${table.status} = 'revoked'
+      and ${table.revokedAt} is not null
+    ) or (
+      ${table.status} in ('active','error')
+      and ${table.revokedAt} is null
     )`,
   ),
 ]);

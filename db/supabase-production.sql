@@ -179,6 +179,7 @@ create table public.provider_connections (
   credential_envelope_nonce text,
   credential_envelope_auth_tag text,
   credential_key_version text,
+  credential_schema_version integer,
   gmail_watch_expires_at timestamptz,
   gmail_history_id text,
   reconnect_required_at timestamptz,
@@ -190,22 +191,53 @@ create table public.provider_connections (
   unique (tenant_id, id, provider),
   check (
     (
-      status = 'pending'
+      status in ('pending','revoked')
       and credential_envelope_ciphertext is null
       and credential_envelope_nonce is null
       and credential_envelope_auth_tag is null
       and credential_key_version is null
+      and credential_schema_version is null
     )
     or (
-      status <> 'pending'
+      status in ('active','reconnect_required','error')
       and credential_envelope_ciphertext is not null
       and credential_envelope_nonce is not null
       and credential_envelope_auth_tag is not null
       and credential_key_version is not null
+      and credential_schema_version is not null
       and length(credential_envelope_ciphertext) > 0
       and length(credential_envelope_nonce) > 0
       and length(credential_envelope_auth_tag) > 0
       and length(credential_key_version) > 0
+      and credential_schema_version > 0
+    )
+    or (
+      status in ('reconnect_required','error')
+      and credential_envelope_ciphertext is null
+      and credential_envelope_nonce is null
+      and credential_envelope_auth_tag is null
+      and credential_key_version is null
+      and credential_schema_version is null
+    )
+  ),
+  check (
+    (
+      status = 'pending'
+      and reconnect_required_at is null
+      and revoked_at is null
+    )
+    or (
+      status = 'reconnect_required'
+      and reconnect_required_at is not null
+      and revoked_at is null
+    )
+    or (
+      status = 'revoked'
+      and revoked_at is not null
+    )
+    or (
+      status in ('active','error')
+      and revoked_at is null
     )
   )
 );

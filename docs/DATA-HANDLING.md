@@ -7,6 +7,10 @@
 - Collect only the contact details, vehicle details, inquiry text or attachment, source, workflow status, and audit metadata needed to manage the lead.
 - Do not request inbox-wide history, unrelated contacts, payment-card data, precise location history, or diagnostic records that are not needed for the inquiry.
 - Any future inbox or calendar connection must use the narrowest approved scopes and a shop-owned account. Gmail, Calendar, OpenAI model access, Stripe, SMS, and live messaging are currently disconnected.
+- Provider credentials, when a future connector is approved, must be stored only
+  as authenticated encrypted envelopes under the lifecycle in
+  `docs/PROVIDER-CREDENTIALS.md`. Revocation clears the entire envelope and
+  provider watch/history state; browser clients receive safe metadata only.
 - Tenant membership is derived on the server. Users may access only their assigned shop, and viewer accounts are read-only.
 
 ## Retention and deletion

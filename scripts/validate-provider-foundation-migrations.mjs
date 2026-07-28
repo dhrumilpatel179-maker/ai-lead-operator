@@ -22,9 +22,18 @@ async function apply(database) {
     ).get(tag)) continue;
     const sql = (await readFile(new URL(filename, migrationDirectory), "utf8"))
       .replaceAll("--> statement-breakpoint", "");
+    const rebuildsReferencedTable = /^\s*PRAGMA foreign_keys=OFF;/iu.test(sql);
+    if (rebuildsReferencedTable) database.exec("PRAGMA foreign_keys = OFF");
     database.exec("BEGIN");
     try {
       database.exec(sql);
+      if (rebuildsReferencedTable) {
+        assert.deepEqual(
+          database.prepare("PRAGMA foreign_key_check").all(),
+          [],
+          `${filename} introduced a foreign-key violation`,
+        );
+      }
       database.prepare(
         "INSERT INTO local_migration_journal (tag) VALUES (?)",
       ).run(tag);
@@ -33,6 +42,8 @@ async function apply(database) {
     } catch (error) {
       database.exec("ROLLBACK");
       throw error;
+    } finally {
+      if (rebuildsReferencedTable) database.exec("PRAGMA foreign_keys = ON");
     }
   }
   return { applied, total: filenames.length };

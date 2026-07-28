@@ -29,4 +29,12 @@ The private manual workflow provisions and tests only the Supabase database, Aut
 
 ## Configuration names
 
-Future configuration names may include `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `OPENAI_API_KEY` (server only), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, an OAuth encryption key, `STRIPE_SECRET_KEY`, and tenant-specific webhook secrets. None are required or configured for this milestone; values must never be committed.
+Future configuration names may include `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server only), `OPENAI_API_KEY` (server only), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `STRIPE_SECRET_KEY`, and tenant-specific webhook secrets. Values must never be committed.
+
+The provider credential foundation defines two server-only bindings:
+`PROVIDER_CREDENTIAL_ACTIVE_KEY_VERSION` and
+`PROVIDER_CREDENTIAL_KEYS_JSON`. Their placeholder-only format, validation,
+rotation behavior, and lifecycle are documented in
+`docs/PROVIDER-CREDENTIALS.md`. They are not configured in the private
+demonstration because no connector path is enabled. Missing configuration fails
+closed when the credential service is first used.

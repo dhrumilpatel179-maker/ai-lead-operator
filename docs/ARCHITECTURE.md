@@ -45,6 +45,13 @@ flowchart TD
 - Connector workers access the credential-bearing base table only with a
   server-held service-role credential; browser roles receive no table grant or
   write policy.
+- Provider credentials use a server-only, provider-neutral AES-256-GCM service
+  with per-envelope random nonces, tenant/connection/provider/schema-version
+  authenticated data, explicit key versions, and old-key decryption during
+  rotation. See `docs/PROVIDER-CREDENTIALS.md`.
+- `D1TokenStore` and `D1ConnectionManager` are internal server foundations.
+  They expose only safe connection metadata outside the smallest credential
+  handling scope; no browser route instantiates them in this milestone.
 - Every repository operation takes a tenant identifier from authenticated server context, never from an untrusted request body.
 - All outbound messages pass the authority gate before the send adapter.
 - AI output is treated as untrusted structured input and validated before storage or action.

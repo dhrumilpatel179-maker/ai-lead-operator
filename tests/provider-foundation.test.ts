@@ -71,7 +71,7 @@ class SqliteD1Adapter implements D1DatabaseLike {
   }
 }
 
-function applyMigrations(database: DatabaseSync): number {
+function applyMigrations(database: DatabaseSync, maximumSequence = Number.POSITIVE_INFINITY): number {
   database.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS local_migration_journal (
@@ -81,6 +81,7 @@ function applyMigrations(database: DatabaseSync): number {
   let applied = 0;
   for (const filename of readdirSync(new URL("../drizzle/", import.meta.url))
     .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+    .filter((name) => Number.parseInt(name.slice(0, 4), 10) <= maximumSequence)
     .sort()) {
     const tag = filename.replace(/\.sql$/, "");
     const exists = database.prepare(
@@ -89,15 +90,23 @@ function applyMigrations(database: DatabaseSync): number {
     if (exists) continue;
     const migration = readFileSync(new URL(`../drizzle/${filename}`, import.meta.url), "utf8")
       .replaceAll("--> statement-breakpoint", "");
+    const rebuildsReferencedTable = /^\s*PRAGMA foreign_keys=OFF;/iu.test(migration);
+    if (rebuildsReferencedTable) database.exec("PRAGMA foreign_keys = OFF");
     database.exec("BEGIN");
     try {
       database.exec(migration);
+      if (rebuildsReferencedTable) {
+        const violations = database.prepare("PRAGMA foreign_key_check").all();
+        assert.deepEqual(violations, [], `${filename} introduced a foreign-key violation`);
+      }
       database.prepare("INSERT INTO local_migration_journal (tag) VALUES (?)").run(tag);
       database.exec("COMMIT");
       applied += 1;
     } catch (error) {
       database.exec("ROLLBACK");
       throw error;
+    } finally {
+      if (rebuildsReferencedTable) database.exec("PRAGMA foreign_keys = ON");
     }
   }
   return applied;
@@ -105,7 +114,7 @@ function applyMigrations(database: DatabaseSync): number {
 
 function createDatabase(): DatabaseSync {
   const database = new DatabaseSync(":memory:");
-  assert.equal(applyMigrations(database), 5);
+  assert.equal(applyMigrations(database), 6);
   return database;
 }
 
@@ -134,8 +143,9 @@ function seedApprovedChain(
     INSERT INTO provider_connections (
       id, tenant_id, provider, external_account_id, status, granted_scopes_json,
       credential_envelope_ciphertext, credential_envelope_nonce,
-      credential_envelope_auth_tag, credential_key_version, created_at, updated_at
-    ) VALUES (?, ?, 'gmail', ?, 'active', '["mail.readonly"]', ?, ?, ?, 'key-v1', ?, ?)
+      credential_envelope_auth_tag, credential_key_version,
+      credential_schema_version, created_at, updated_at
+    ) VALUES (?, ?, 'gmail', ?, 'active', '["mail.readonly"]', ?, ?, ?, 'key-v1', 1, ?, ?)
   `).run(
     connectionId,
     input.tenantId,
@@ -236,6 +246,93 @@ test("connector migration rerun is safe", () => {
   assert.equal(applyMigrations(database), 0);
   const after = database.prepare("SELECT count(*) AS count FROM local_migration_journal").get() as { count: number };
   assert.equal(after.count, before.count);
+});
+
+test("credential lifecycle migration preserves existing connections and tenant references", () => {
+  const database = new DatabaseSync(":memory:");
+  assert.equal(applyMigrations(database, 4), 5);
+  seedTenant(database, "tenant_migration");
+  const insert = database.prepare(`
+    INSERT INTO provider_connections (
+      id, tenant_id, provider, external_account_id, status, granted_scopes_json,
+      credential_envelope_ciphertext, credential_envelope_nonce,
+      credential_envelope_auth_tag, credential_key_version,
+      created_at, updated_at
+    ) VALUES (?, 'tenant_migration', 'gmail', ?, ?, '["mail.readonly"]',
+      ?, ?, ?, 'legacy-v1', ?, ?)
+  `);
+  insert.run(
+    "connection_migration_active",
+    "migration-active@example.invalid",
+    "active",
+    "legacy-ciphertext-active",
+    "legacy-nonce-active",
+    "legacy-tag-active",
+    NOW,
+    NOW,
+  );
+  insert.run(
+    "connection_migration_revoked",
+    "migration-revoked@example.invalid",
+    "revoked",
+    "legacy-ciphertext-revoked",
+    "legacy-nonce-revoked",
+    "legacy-tag-revoked",
+    NOW,
+    NOW,
+  );
+  database.prepare(`
+    INSERT INTO inbound_provider_events (
+      id, tenant_id, connection_id, provider, external_event_id, payload_hash,
+      received_at, deletion_due_at
+    ) VALUES (
+      'event_migration', 'tenant_migration', 'connection_migration_active',
+      'gmail', 'event-migration', ?, ?, ?
+    )
+  `).run(HASH_A, NOW, RETENTION);
+  assert.equal(applyMigrations(database), 1);
+  assert.deepEqual(
+    { ...database.prepare(`
+      SELECT status, credential_key_version AS keyVersion,
+        credential_schema_version AS schemaVersion
+      FROM provider_connections
+      WHERE id = 'connection_migration_active'
+    `).get() },
+    { status: "active", keyVersion: "legacy-v1", schemaVersion: 1 },
+  );
+  assert.deepEqual(
+    { ...database.prepare(`
+      SELECT status, granted_scopes_json AS scopes,
+        credential_envelope_ciphertext AS ciphertext,
+        credential_envelope_nonce AS nonce,
+        credential_envelope_auth_tag AS authTag,
+        credential_key_version AS keyVersion,
+        credential_schema_version AS schemaVersion,
+        revoked_at AS revokedAt
+      FROM provider_connections
+      WHERE id = 'connection_migration_revoked'
+    `).get() },
+    {
+      status: "revoked",
+      scopes: "[]",
+      ciphertext: null,
+      nonce: null,
+      authTag: null,
+      keyVersion: null,
+      schemaVersion: null,
+      revokedAt: NOW,
+    },
+  );
+  assert.deepEqual(
+    { ...database.prepare(
+      "SELECT connection_id AS connectionId FROM inbound_provider_events WHERE id = 'event_migration'",
+    ).get() },
+    { connectionId: "connection_migration_active" },
+  );
+  assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.ok(database.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'provider_outbox_chain_insert'",
+  ).get());
 });
 
 test("duplicate provider events are rejected without raw payload storage", () => {
@@ -340,7 +437,8 @@ test("pending provider connections contain no credential placeholders", () => {
       credential_envelope_ciphertext AS ciphertext,
       credential_envelope_nonce AS nonce,
       credential_envelope_auth_tag AS authTag,
-      credential_key_version AS keyVersion
+      credential_key_version AS keyVersion,
+      credential_schema_version AS credentialSchemaVersion
     FROM provider_connections
     WHERE id = 'connection_pending'
   `).get() as {
@@ -348,12 +446,14 @@ test("pending provider connections contain no credential placeholders", () => {
     nonce: string | null;
     authTag: string | null;
     keyVersion: string | null;
+    credentialSchemaVersion: number | null;
   };
   assert.deepEqual({ ...row }, {
     ciphertext: null,
     nonce: null,
     authTag: null,
     keyVersion: null,
+    credentialSchemaVersion: null,
   });
   assert.throws(
     () => database.prepare(`

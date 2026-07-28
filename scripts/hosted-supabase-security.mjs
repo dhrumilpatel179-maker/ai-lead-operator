@@ -237,7 +237,7 @@ assert.ok(viewerLeads.length >= 1 && viewerLeads.every((lead) => lead.tenant_id 
 
 await rest(
   tokens.owner,
-  "provider_connections?select=id,tenant_id,credential_envelope_ciphertext,credential_envelope_nonce,credential_envelope_auth_tag,credential_key_version",
+  "provider_connections?select=id,tenant_id,credential_envelope_ciphertext,credential_envelope_nonce,credential_envelope_auth_tag,credential_key_version,credential_schema_version",
   "GET",
   undefined,
   [401, 403],
